@@ -51,7 +51,7 @@
                 const data = await response.json();
                 chat.innerHTML += `<p><strong style="color:#00d4ff;">Elora:</strong> ${data.reply}</p>`;
             } catch (e) {
-                chat.innerHTML += `<p style="color:red;">Error: Asegúrate de darle a RUN primero.</p>`;
+                chat.innerHTML += `<p style="color:red;">Error de conexión: ${e.message}</p>`;
             }
             chat.scrollTop = chat.scrollHeight;
         }
