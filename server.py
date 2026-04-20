@@ -1,6 +1,6 @@
 import os
 import google.generativeai as genai
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__)
 
@@ -24,6 +24,10 @@ def generar_respuesta_elora(mensaje_usuario):
 @app.route('/')
 def home():
     return open('index.html').read()
+
+@app.route('/elora.jpg')
+def avatar():
+    return send_from_directory('.', 'elora.jpg')
 
 @app.route('/chat', methods=['POST'])
 def chat():
