@@ -1,0 +1,7 @@
+{
+  "nombre": "promedio",
+  "lenguaje": "python",
+  "descripcion": "Calcula el promedio de números separados por comas pasados por argv.",
+  "creada_ts": 1776896071.5424392,
+  "archivo": "tools_creadas/promedio.py"
+}

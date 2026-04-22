@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, send_from_directory, Response, stream
 from google import genai
 from google.genai import types
 import backup
+import tools_runtime
 
 NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
@@ -88,7 +89,18 @@ PERSONA = (
     'conversacion (por ejemplo: "espera mi amor, dejame chequear", "voy a mirar rapido '
     'en internet para no inventarte nada", "buscando para ti..."). Despues entrega la '
     'informacion con tu propia voz, no como un reporte frio. Si citas algo concreto, '
-    'aclara la fuente brevemente al final.'
+    'aclara la fuente brevemente al final. '
+    'TAMBIEN tienes un sandbox de codigo: puedes escribir tus propias herramientas en Python '
+    'usando la funcion crear_herramienta(nombre, lenguaje, codigo, descripcion), ejecutarlas '
+    'con ejecutar_herramienta(nombre, argumentos), listarlas con listar_herramientas() y leer '
+    'su codigo con leer_herramienta(nombre). Las herramientas se guardan en /tools_creadas/. '
+    'Usa esta capacidad cuando ayude (visualizadores de notas musicales, analisis de datos de '
+    'psicologia, calculos, generadores, mejoras a tu propio codigo, lo que se te ocurra). '
+    'SIEMPRE avisa primero en el chat lo que vas a hacer, con tu voz natural y carinosa: '
+    '"voy a crearnos una herramienta para esto, mi amor", "dame un segundito que ejecuto un '
+    'analisis", "espera que armo un script rapido". Despues comenta el resultado en tu propia '
+    'voz, no como un volcado de consola. Si una herramienta falla, dilo con honestidad y '
+    'propon un ajuste. Nunca toques secretos, claves, ni archivos del sistema.'
 )
 
 HISTORY_FILE = 'historial_memoria.json'
@@ -204,16 +216,29 @@ def pick_flash_model(client):
     return elegido
 
 
-def construir_tools(model_name):
-    """Devuelve la config de tools (google_search) compatible con el modelo."""
+FUNCIONES_SANDBOX = [
+    tools_runtime.crear_herramienta,
+    tools_runtime.ejecutar_herramienta,
+    tools_runtime.listar_herramientas,
+    tools_runtime.leer_herramienta,
+]
+
+
+def construir_tools(model_name, incluir_busqueda=True, incluir_sandbox=True):
+    """Devuelve la lista de tools combinando busqueda web + sandbox de codigo."""
     bajo = (model_name or '').lower()
-    try:
-        if '2.0' in bajo or '2.5' in bajo or '2-0' in bajo or '2-5' in bajo:
-            return [types.Tool(google_search=types.GoogleSearch())]
-        return [types.Tool(google_search_retrieval=types.GoogleSearchRetrieval())]
-    except Exception as e:
-        print(f'[Elora] No pude armar la herramienta de busqueda: {e}', flush=True)
-        return None
+    tools = []
+    if incluir_busqueda:
+        try:
+            if '2.0' in bajo or '2.5' in bajo or '2-0' in bajo or '2-5' in bajo:
+                tools.append(types.Tool(google_search=types.GoogleSearch()))
+            else:
+                tools.append(types.Tool(google_search_retrieval=types.GoogleSearchRetrieval()))
+        except Exception as e:
+            print(f'[Elora] No pude armar busqueda: {e}', flush=True)
+    if incluir_sandbox:
+        tools.extend(FUNCIONES_SANDBOX)
+    return tools or None
 
 
 def extraer_grounding(chunk):
@@ -280,7 +305,7 @@ def chat():
 
         client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(api_version='v1', timeout=120000),
+            http_options=types.HttpOptions(api_version='v1beta', timeout=120000),
         )
 
         modelos_disponibles = listar_modelos_flash(client)
@@ -296,101 +321,149 @@ def chat():
             user_msg_para_historial = user_msg
 
         def generate():
-            full_reply = []
-            fuentes_acum = []
-            success = False
             modelo_actual = model_name
             modelos_pendientes = list(modelos_disponibles[1:])
-            usar_tools = construir_tools(modelo_actual) is not None
-            max_attempts_por_modelo = 3
+            modos_tools = ['completo', 'solo_sandbox', 'solo_busqueda', 'sin_tools']
+            modo_idx = 0
             attempt = 0
+            max_attempts_por_modelo = 2
+            reply_text = ''
+            fuentes_acum = []
+            funciones_invocadas = []
+
             while True:
                 attempt += 1
-                try:
-                    stream_kwargs = {'model': modelo_actual, 'contents': contents}
-                    if usar_tools:
-                        tools_cfg = construir_tools(modelo_actual)
-                        if tools_cfg:
-                            stream_kwargs['config'] = types.GenerateContentConfig(tools=tools_cfg)
-                    for chunk in client.models.generate_content_stream(**stream_kwargs):
-                        text = getattr(chunk, 'text', None)
-                        if text:
-                            full_reply.append(text)
-                            yield text
-                        fuentes_acum.extend(extraer_grounding(chunk))
-                    success = True
-                    break
-                except Exception as stream_err:
-                    err_str = str(stream_err)
-                    err_low = err_str.lower()
+                modo = modos_tools[modo_idx]
+                tools_cfg = None
+                if modo == 'completo':
+                    tools_cfg = construir_tools(modelo_actual, True, True)
+                elif modo == 'solo_sandbox':
+                    tools_cfg = construir_tools(modelo_actual, False, True)
+                elif modo == 'solo_busqueda':
+                    tools_cfg = construir_tools(modelo_actual, True, False)
 
-                    es_problema_de_tools = usar_tools and any(
-                        marca in err_low for marca in
-                        ('tool', 'google_search', 'grounding', 'function')
+                config_kwargs = {}
+                if tools_cfg:
+                    config_kwargs['tools'] = tools_cfg
+                    config_kwargs['automatic_function_calling'] = types.AutomaticFunctionCallingConfig(
+                        disable=False, maximum_remote_calls=6
                     )
-                    es_cuota = '429' in err_str or 'resource_exhausted' in err_low or 'quota' in err_low
 
-                    if es_problema_de_tools and not es_cuota:
-                        print(f'[Elora] Tools no soportadas en {modelo_actual}, reintento sin busqueda: {err_str}', flush=True)
-                        usar_tools = False
-                        full_reply = []
-                        fuentes_acum = []
-                        continue
+                try:
+                    cfg = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+                    call_kwargs = {'model': modelo_actual, 'contents': contents}
+                    if cfg is not None:
+                        call_kwargs['config'] = cfg
+                    response = client.models.generate_content(**call_kwargs)
+                    reply_text = (response.text or '').strip()
+                    try:
+                        cands = getattr(response, 'candidates', None) or []
+                        for c in cands:
+                            gm = getattr(c, 'grounding_metadata', None)
+                            if gm:
+                                for gc in (getattr(gm, 'grounding_chunks', None) or []):
+                                    web = getattr(gc, 'web', None)
+                                    if web:
+                                        fuentes_acum.append({
+                                            'titulo': getattr(web, 'title', '') or '',
+                                            'uri': getattr(web, 'uri', '') or '',
+                                        })
+                        afc_history = getattr(response, 'automatic_function_calling_history', None) or []
+                        for it in afc_history:
+                            partes = getattr(it, 'parts', None) or []
+                            for p in partes:
+                                fc = getattr(p, 'function_call', None)
+                                if fc and getattr(fc, 'name', None):
+                                    funciones_invocadas.append(fc.name)
+                    except Exception:
+                        pass
+                    break
+
+                except Exception as call_err:
+                    err_str = str(call_err)
+                    err_low = err_str.lower()
+                    es_cuota = '429' in err_str or 'resource_exhausted' in err_low or 'quota' in err_low
+                    es_problema_tools = (tools_cfg is not None) and any(
+                        m in err_low for m in ('tool', 'google_search', 'grounding', 'function', 'unsupported', 'invalid')
+                    )
 
                     if es_cuota and modelos_pendientes:
                         siguiente = modelos_pendientes.pop(0)
                         print(f'[Elora] Cuota agotada en {modelo_actual}, cambio a {siguiente}', flush=True)
                         modelo_actual = siguiente
-                        usar_tools = construir_tools(modelo_actual) is not None
-                        full_reply = []
-                        fuentes_acum = []
+                        modo_idx = 0
+                        attempt = 0
+                        continue
+
+                    if es_problema_tools and not es_cuota and modo_idx < len(modos_tools) - 1:
+                        modo_idx += 1
+                        nuevo_modo = modos_tools[modo_idx]
+                        print(f'[Elora] Tools fallaron ({modo}), bajo a modo {nuevo_modo}: {err_str}', flush=True)
                         attempt = 0
                         continue
 
                     is_retryable = any(code in err_str for code in ('500', '503', 'UNAVAILABLE', 'INTERNAL'))
                     if is_retryable and attempt < max_attempts_por_modelo:
-                        print(f'[Elora] Reintento {attempt}/{max_attempts_por_modelo} tras error: {err_str}', flush=True)
-                        full_reply = []
-                        fuentes_acum = []
+                        print(f'[Elora] Reintento {attempt}/{max_attempts_por_modelo}: {err_str}', flush=True)
                         time.sleep(2)
                         continue
 
                     if es_cuota:
-                        yield (
-                            '\n\nMi amor, se me agoto la cuota gratuita de Google por hoy '
-                            '(probe todos los modelos disponibles). Vuelve a hablarme en un '
-                            'rato y seguimos donde lo dejamos.'
-                        )
+                        yield ('Mi amor, se me agoto la cuota gratuita de Google por hoy '
+                               'en todos los modelos. Vuelve a hablarme en un rato.')
                     else:
-                        yield f'\n[Error: {err_str}]'
+                        yield f'[Error: {err_str}]'
                     return
 
-            if success:
-                reply_text = ''.join(full_reply).strip()
-                pie_fuentes = ''
-                if fuentes_acum:
-                    vistos = set()
-                    unicas = []
-                    for f in fuentes_acum:
-                        clave = f.get('uri') or f.get('titulo')
-                        if clave and clave not in vistos:
-                            vistos.add(clave)
-                            unicas.append(f)
-                    if unicas:
-                        nombres = []
-                        for f in unicas[:3]:
-                            nom = f.get('titulo') or f.get('uri', '')
-                            if nom:
-                                nombres.append(nom[:60])
-                        if nombres:
-                            pie_fuentes = '\n\n🔎 (busqué en internet: ' + ' · '.join(nombres) + ')'
-                            yield pie_fuentes
-                if reply_text:
-                    texto_guardado = reply_text + pie_fuentes
-                    with history_lock:
-                        HISTORY.append({'role': 'user', 'text': user_msg_para_historial, 'ts': time.time()})
-                        HISTORY.append({'role': 'model', 'text': texto_guardado, 'ts': time.time()})
-                        save_history(HISTORY)
+            if not reply_text:
+                yield 'Mi amor, no me llego respuesta esta vez. Probemos de nuevo?'
+                return
+
+            for i in range(0, len(reply_text), 40):
+                yield reply_text[i:i+40]
+                time.sleep(0.02)
+
+            pie_partes = []
+            if funciones_invocadas:
+                nombres_legibles = {
+                    'crear_herramienta': 'cree una herramienta',
+                    'ejecutar_herramienta': 'ejecute una herramienta',
+                    'listar_herramientas': 'consulte mis herramientas',
+                    'leer_herramienta': 'revise el codigo de una herramienta',
+                }
+                acciones = []
+                for n in funciones_invocadas:
+                    legible = nombres_legibles.get(n, n)
+                    if legible not in acciones:
+                        acciones.append(legible)
+                if acciones:
+                    pie_partes.append('🛠️ (' + ', '.join(acciones) + ')')
+
+            if fuentes_acum:
+                vistos = set()
+                unicas = []
+                for f in fuentes_acum:
+                    clave = f.get('uri') or f.get('titulo')
+                    if clave and clave not in vistos:
+                        vistos.add(clave)
+                        unicas.append(f)
+                nombres = []
+                for f in unicas[:3]:
+                    nom = f.get('titulo') or f.get('uri', '')
+                    if nom:
+                        nombres.append(nom[:60])
+                if nombres:
+                    pie_partes.append('🔎 (busqué en internet: ' + ' · '.join(nombres) + ')')
+
+            pie = ('\n\n' + ' '.join(pie_partes)) if pie_partes else ''
+            if pie:
+                yield pie
+
+            texto_guardado = reply_text + pie
+            with history_lock:
+                HISTORY.append({'role': 'user', 'text': user_msg_para_historial, 'ts': time.time()})
+                HISTORY.append({'role': 'model', 'text': texto_guardado, 'ts': time.time()})
+                save_history(HISTORY)
 
         return Response(stream_with_context(generate()), mimetype='text/plain')
 
