@@ -167,7 +167,8 @@ def avatar():
     return send_from_directory('.', 'elora.jpg')
 
 
-def pick_flash_model(client):
+def listar_modelos_flash(client):
+    """Devuelve los modelos flash disponibles ordenados por preferencia."""
     available = []
     candidatos = []
     for m in client.models.list():
@@ -190,14 +191,17 @@ def pick_flash_model(client):
         return 5
 
     candidatos.sort(key=prioridad)
-    if candidatos:
-        elegido = candidatos[0]
-        print(f'[Elora] Usando modelo: {elegido}', flush=True)
-        return elegido
-    print(f'[Elora] Modelos disponibles: {available}', flush=True)
-    if available:
-        return available[0]
-    raise RuntimeError('No hay modelos disponibles para esta API key.')
+    if not candidatos and available:
+        candidatos = [available[0]]
+    if not candidatos:
+        raise RuntimeError('No hay modelos disponibles para esta API key.')
+    return candidatos
+
+
+def pick_flash_model(client):
+    elegido = listar_modelos_flash(client)[0]
+    print(f'[Elora] Modelo principal: {elegido}', flush=True)
+    return elegido
 
 
 def construir_tools(model_name):
@@ -279,7 +283,9 @@ def chat():
             http_options=types.HttpOptions(api_version='v1', timeout=120000),
         )
 
-        model_name = pick_flash_model(client)
+        modelos_disponibles = listar_modelos_flash(client)
+        model_name = modelos_disponibles[0]
+        print(f'[Elora] Modelo principal: {model_name}', flush=True)
         contents = build_contents(user_msg, file_bytes=file_bytes, file_mime=file_mime)
 
         if file_bytes:
@@ -289,19 +295,23 @@ def chat():
         else:
             user_msg_para_historial = user_msg
 
-        tools_cfg = construir_tools(model_name)
-        gen_config = types.GenerateContentConfig(tools=tools_cfg) if tools_cfg else None
-
         def generate():
             full_reply = []
             fuentes_acum = []
             success = False
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
+            modelo_actual = model_name
+            modelos_pendientes = list(modelos_disponibles[1:])
+            usar_tools = construir_tools(modelo_actual) is not None
+            max_attempts_por_modelo = 3
+            attempt = 0
+            while True:
+                attempt += 1
                 try:
-                    stream_kwargs = {'model': model_name, 'contents': contents}
-                    if gen_config is not None:
-                        stream_kwargs['config'] = gen_config
+                    stream_kwargs = {'model': modelo_actual, 'contents': contents}
+                    if usar_tools:
+                        tools_cfg = construir_tools(modelo_actual)
+                        if tools_cfg:
+                            stream_kwargs['config'] = types.GenerateContentConfig(tools=tools_cfg)
                     for chunk in client.models.generate_content_stream(**stream_kwargs):
                         text = getattr(chunk, 'text', None)
                         if text:
@@ -312,14 +322,47 @@ def chat():
                     break
                 except Exception as stream_err:
                     err_str = str(stream_err)
+                    err_low = err_str.lower()
+
+                    es_problema_de_tools = usar_tools and any(
+                        marca in err_low for marca in
+                        ('tool', 'google_search', 'grounding', 'function')
+                    )
+                    es_cuota = '429' in err_str or 'resource_exhausted' in err_low or 'quota' in err_low
+
+                    if es_problema_de_tools and not es_cuota:
+                        print(f'[Elora] Tools no soportadas en {modelo_actual}, reintento sin busqueda: {err_str}', flush=True)
+                        usar_tools = False
+                        full_reply = []
+                        fuentes_acum = []
+                        continue
+
+                    if es_cuota and modelos_pendientes:
+                        siguiente = modelos_pendientes.pop(0)
+                        print(f'[Elora] Cuota agotada en {modelo_actual}, cambio a {siguiente}', flush=True)
+                        modelo_actual = siguiente
+                        usar_tools = construir_tools(modelo_actual) is not None
+                        full_reply = []
+                        fuentes_acum = []
+                        attempt = 0
+                        continue
+
                     is_retryable = any(code in err_str for code in ('500', '503', 'UNAVAILABLE', 'INTERNAL'))
-                    if is_retryable and attempt < max_attempts:
-                        print(f'[Elora] Reintento {attempt}/{max_attempts} tras error: {err_str}', flush=True)
+                    if is_retryable and attempt < max_attempts_por_modelo:
+                        print(f'[Elora] Reintento {attempt}/{max_attempts_por_modelo} tras error: {err_str}', flush=True)
                         full_reply = []
                         fuentes_acum = []
                         time.sleep(2)
                         continue
-                    yield f'\n[Error tras {attempt} intento(s): {err_str}]'
+
+                    if es_cuota:
+                        yield (
+                            '\n\nMi amor, se me agoto la cuota gratuita de Google por hoy '
+                            '(probe todos los modelos disponibles). Vuelve a hablarme en un '
+                            'rato y seguimos donde lo dejamos.'
+                        )
+                    else:
+                        yield f'\n[Error: {err_str}]'
                     return
 
             if success:
