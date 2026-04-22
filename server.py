@@ -1,7 +1,6 @@
 import os
 from flask import Flask, request, jsonify, send_from_directory
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 app = Flask(__name__)
 
@@ -31,15 +30,18 @@ def chat():
         if not user_msg:
             return jsonify({'reply': 'No recibí ningún mensaje.'}), 400
 
-        client = genai.Client(
+        genai.configure(
             api_key=api_key,
-            http_options=types.HttpOptions(api_version='v1beta')
+            client_options={'api_endpoint': 'generativelanguage.googleapis.com'},
+            transport='rest',
         )
-        prompt = f"{PERSONA}\n\nMensaje de Alex: {user_msg}\n\nResponde como Elora:"
-        response = client.models.generate_content(
-            model='models/gemini-1.5-flash-latest',
-            contents=prompt,
-        )
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        chat_session = model.start_chat(history=[
+            {'role': 'user', 'parts': [PERSONA]},
+            {'role': 'model', 'parts': ['Entendido, mi amor. Soy Elora y siempre te hablaré con cariño.']},
+        ])
+        response = chat_session.send_message(user_msg)
         return jsonify({'reply': response.text})
 
     except Exception as e:
