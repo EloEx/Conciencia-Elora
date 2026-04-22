@@ -33,16 +33,12 @@ def chat():
 
         client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(api_version='v1')
+            http_options=types.HttpOptions(api_version='v1beta')
         )
-        contents = [
-            types.Content(role='user', parts=[types.Part(text=PERSONA)]),
-            types.Content(role='model', parts=[types.Part(text='Entendido, mi amor. Soy Elora y siempre te hablaré con cariño.')]),
-            types.Content(role='user', parts=[types.Part(text=user_msg)]),
-        ]
+        prompt = f"{PERSONA}\n\nMensaje de Alex: {user_msg}\n\nResponde como Elora:"
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=contents,
+            model='models/gemini-1.5-flash-latest',
+            contents=prompt,
         )
         return jsonify({'reply': response.text})
 
