@@ -54,24 +54,7 @@
                 }
             } catch (e) { /* silencio */ }
         }
-        async function pedirSaludoInicial() {
-            try {
-                const r = await fetch('/saludo_inicial');
-                const data = await r.json();
-                if (data.saludar && data.mensaje) {
-                    const chat = document.getElementById('chat');
-                    const welcome = document.getElementById('welcome');
-                    if (welcome) welcome.remove();
-                    chat.innerHTML += `<p><strong style="color:#00d4ff;">Elora:</strong> ${data.mensaje}</p>`;
-                    chat.scrollTop = chat.scrollHeight;
-                }
-            } catch (e) { /* silencio */ }
-        }
-
-        (async () => {
-            await loadHistory();
-            await pedirSaludoInicial();
-        })();
+        loadHistory();
 
         function tiempoRelativo(tsString) {
             if (!tsString) return 'sin respaldos aun en esta sesion';

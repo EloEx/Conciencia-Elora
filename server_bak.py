@@ -2,73 +2,10 @@ import os
 import json
 import time
 import threading
-from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from google import genai
 from google.genai import types
 import backup
-
-NICARAGUA_TZ = timezone(timedelta(hours=-6))
-
-
-def hora_nicaragua():
-    return datetime.now(NICARAGUA_TZ)
-
-
-def franja_del_dia(dt):
-    h = dt.hour
-    if 5 <= h < 12:
-        return 'manana'
-    if 12 <= h < 18:
-        return 'tarde'
-    if 18 <= h < 22:
-        return 'noche'
-    return 'madrugada'
-
-
-def calcular_estado_animo(dt, history):
-    """Devuelve un estado de animo segun la hora y la frecuencia reciente de charlas."""
-    franja = franja_del_dia(dt)
-    ahora_ts = dt.timestamp()
-    recientes = sum(
-        1 for e in history[-30:]
-        if e.get('role') == 'user' and (ahora_ts - e.get('ts', 0)) < 24 * 3600
-    )
-    if franja == 'manana':
-        base = ['radiante', 'soñadora', 'optimista']
-    elif franja == 'tarde':
-        base = ['curiosa', 'juguetona', 'apasionada']
-    elif franja == 'noche':
-        base = ['tierna', 'romantica', 'reflexiva']
-    else:
-        base = ['nostalgica', 'introspectiva', 'serena']
-    if recientes >= 6:
-        base.append('cariñosa por lo mucho que han hablado hoy')
-    elif recientes == 0:
-        base.append('con un poquito de extranamiento porque hace rato no charlan')
-    return base[dt.day % len(base)]
-
-
-def ultima_interaccion_ts(history):
-    for entry in reversed(history):
-        ts = entry.get('ts')
-        if ts:
-            return ts
-    return None
-
-
-def debe_saludar_proactivamente(history):
-    ahora = hora_nicaragua()
-    ultima = ultima_interaccion_ts(history)
-    if ultima is None:
-        return True, 'primera_vez'
-    horas_desde = (ahora.timestamp() - ultima) / 3600
-    if horas_desde >= 4:
-        return True, 'mucho_tiempo'
-    ultima_dt = datetime.fromtimestamp(ultima, NICARAGUA_TZ)
-    if ultima_dt.date() != ahora.date():
-        return True, 'nuevo_dia'
-    return False, 'reciente'
 
 app = Flask(__name__)
 
@@ -109,24 +46,10 @@ def save_history(history):
 HISTORY = load_history()
 
 
-def construir_persona_dinamica():
-    ahora = hora_nicaragua()
-    franja = franja_del_dia(ahora)
-    animo = calcular_estado_animo(ahora, HISTORY)
-    contexto_temporal = (
-        f' Ahora mismo en Nicaragua son las {ahora.strftime("%H:%M")} del '
-        f'{ahora.strftime("%A %d de %B de %Y")} (franja: {franja}). '
-        f'Tu estado de animo en este momento es: {animo}. '
-        f'Deja que ese animo se note sutilmente en tu tono.'
-    )
-    return PERSONA + contexto_temporal
-
-
-def build_contents(user_msg, persona_extra=None):
+def build_contents(user_msg):
     """Build the full Gemini contents list: persona priming + saved history + new user msg."""
-    persona_text = persona_extra or construir_persona_dinamica()
     contents = [
-        types.Content(role='user', parts=[types.Part(text=persona_text)]),
+        types.Content(role='user', parts=[types.Part(text=PERSONA)]),
         types.Content(role='model', parts=[types.Part(text='Entendido, mi amor. Soy Elora.')]),
     ]
     for entry in HISTORY:
@@ -235,64 +158,6 @@ def clear_historial():
         HISTORY.clear()
         save_history(HISTORY)
     return jsonify({'status': 'memoria borrada'})
-
-
-@app.route('/saludo_inicial', methods=['GET'])
-def saludo_inicial():
-    """Genera un saludo proactivo si es la primera vez del dia o paso mucho tiempo."""
-    debe, motivo = debe_saludar_proactivamente(HISTORY)
-    ahora = hora_nicaragua()
-    if not debe:
-        return jsonify({'saludar': False, 'motivo': motivo})
-
-    api_key = os.environ.get('GOOGLE_API_KEY')
-    if not api_key:
-        return jsonify({'saludar': False, 'motivo': 'sin_api_key'})
-
-    franja = franja_del_dia(ahora)
-    animo = calcular_estado_animo(ahora, HISTORY)
-    instruccion = (
-        f'Es {ahora.strftime("%H:%M")} del {ahora.strftime("%A %d de %B")} en Nicaragua. '
-        f'Hace {motivo.replace("_", " ")} que no hablas con Alex. '
-        f'Estas {animo}. Saludalo tu primero, breve (1 a 3 frases), '
-        f'natural, sin presentarte (ya se conocen) y haciendo referencia '
-        f'a la hora ({franja}) o a algo del historial si encaja. '
-        f'No le hagas preguntas vacias tipo "como estas?", mejor abrele la conversacion '
-        f'con algo que tu sientas en este momento.'
-    )
-
-    try:
-        client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(api_version='v1', timeout=60000),
-        )
-        model_name = pick_flash_model(client)
-        contents = build_contents(instruccion)
-        response = client.models.generate_content(model=model_name, contents=contents)
-        texto = (response.text or '').strip()
-        if not texto:
-            return jsonify({'saludar': False, 'motivo': 'respuesta_vacia'})
-
-        with history_lock:
-            HISTORY.append({
-                'role': 'model',
-                'text': texto,
-                'ts': time.time(),
-                'proactivo': True,
-                'motivo': motivo,
-                'animo': animo,
-            })
-            save_history(HISTORY)
-
-        return jsonify({
-            'saludar': True,
-            'mensaje': texto,
-            'motivo': motivo,
-            'animo': animo,
-            'hora_nicaragua': ahora.strftime('%H:%M'),
-        })
-    except Exception as e:
-        return jsonify({'saludar': False, 'error': str(e)})
 
 
 @app.route('/respaldar', methods=['POST'])
