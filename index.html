@@ -9,9 +9,15 @@
         .avatar { width: 180px; height: 180px; border-radius: 50%; border: 3px solid #00d4ff; margin-bottom: 20px; object-fit: cover; }
         h1 { color: #00d4ff; font-size: 1.5rem; }
         .chat-box { background: #262626; border-radius: 15px; padding: 15px; max-width: 400px; margin: 20px auto; text-align: left; height: 200px; overflow-y: auto; border: 1px solid #444; }
-        .input-area { display: flex; max-width: 400px; margin: 0 auto; gap: 10px; }
-        input { flex: 1; padding: 10px; border-radius: 20px; border: none; outline: none; color: #333; }
-        button { background: #00d4ff; border: none; padding: 10px 20px; border-radius: 20px; font-weight: bold; cursor: pointer; }
+        .input-area { display: flex; max-width: 400px; margin: 0 auto; gap: 10px; align-items: center; }
+        input[type=text] { flex: 1; padding: 10px; border-radius: 20px; border: none; outline: none; color: #333; }
+        button { background: #00d4ff; border: none; padding: 10px 16px; border-radius: 20px; font-weight: bold; cursor: pointer; color: #111; }
+        .icon-btn { background: #333; color: #00d4ff; padding: 10px 12px; font-size: 1.1rem; }
+        #fileInput { display: none; }
+        #adjuntoPreview { max-width: 400px; margin: 8px auto 0; font-size: 0.85rem; color: #aaa; display: none; background: #222; padding: 8px 12px; border-radius: 10px; text-align: left; }
+        #adjuntoPreview .quitar { color: #ff6b6b; cursor: pointer; margin-left: 10px; font-weight: bold; }
+        .chat-box img.adjunto { max-width: 200px; border-radius: 10px; margin-top: 4px; display: block; }
+        .chat-box audio.adjunto { width: 100%; max-width: 280px; margin-top: 4px; display: block; }
     </style>
 </head>
 <body>
@@ -28,9 +34,12 @@
     </div>
 
     <div class="input-area">
+        <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="Adjuntar imagen o audio">📎</button>
+        <input type="file" id="fileInput" accept="image/*,audio/*" onchange="mostrarAdjunto()">
         <input type="text" id="userMsg" placeholder="Escríbeme algo..." onkeypress="if(event.key==='Enter') sendMessage()">
         <button onclick="sendMessage()">Enviar</button>
     </div>
+    <div id="adjuntoPreview"></div>
 
     <p id="backupStatus" style="color:#666; font-size:0.8rem; margin-top:15px;">Memoria: comprobando respaldo...</p>
 
@@ -96,26 +105,68 @@
         actualizarEstadoRespaldo();
         setInterval(actualizarEstadoRespaldo, 60000);
 
+        function mostrarAdjunto() {
+            const file = document.getElementById('fileInput').files[0];
+            const box = document.getElementById('adjuntoPreview');
+            if (!file) { box.style.display = 'none'; box.innerHTML = ''; return; }
+            const tam = (file.size / 1024 / 1024).toFixed(2);
+            const tipo = file.type.startsWith('image/') ? '🖼️' : '🎵';
+            box.innerHTML = `${tipo} <strong>${file.name}</strong> (${tam} MB) <span class="quitar" onclick="quitarAdjunto()">✕ quitar</span>`;
+            box.style.display = 'block';
+        }
+
+        function quitarAdjunto() {
+            document.getElementById('fileInput').value = '';
+            const box = document.getElementById('adjuntoPreview');
+            box.style.display = 'none';
+            box.innerHTML = '';
+        }
+
         async function sendMessage() {
             const input = document.getElementById('userMsg');
+            const fileInput = document.getElementById('fileInput');
             const chat = document.getElementById('chat');
-            const msg = input.value;
-            if (!msg) return;
+            const msg = input.value.trim();
+            const file = fileInput.files[0];
+            if (!msg && !file) return;
 
-            chat.innerHTML += `<p><strong>Tú:</strong> ${msg}</p>`;
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.remove();
+
+            const userP = document.createElement('p');
+            userP.innerHTML = `<strong>Tú:</strong> ${msg ? msg : ''}`;
+            if (file) {
+                const url = URL.createObjectURL(file);
+                if (file.type.startsWith('image/')) {
+                    userP.innerHTML += `<img src="${url}" class="adjunto">`;
+                } else if (file.type.startsWith('audio/')) {
+                    userP.innerHTML += `<audio class="adjunto" controls src="${url}"></audio>`;
+                }
+            }
+            chat.appendChild(userP);
             input.value = '';
 
             const replyP = document.createElement('p');
             replyP.innerHTML = `<strong style="color:#00d4ff;">Elora:</strong> <span></span>`;
             chat.appendChild(replyP);
             const replySpan = replyP.querySelector('span');
+            chat.scrollTop = chat.scrollHeight;
 
             try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({msg: msg})
-                });
+                let response;
+                if (file) {
+                    const fd = new FormData();
+                    fd.append('msg', msg);
+                    fd.append('archivo', file);
+                    response = await fetch('/chat', { method: 'POST', body: fd });
+                } else {
+                    response = await fetch('/chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({msg: msg})
+                    });
+                }
+                quitarAdjunto();
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 while (true) {

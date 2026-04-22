@@ -122,8 +122,9 @@ def construir_persona_dinamica():
     return PERSONA + contexto_temporal
 
 
-def build_contents(user_msg, persona_extra=None):
-    """Build the full Gemini contents list: persona priming + saved history + new user msg."""
+def build_contents(user_msg, persona_extra=None, file_bytes=None, file_mime=None):
+    """Build the full Gemini contents list: persona priming + saved history + new user msg.
+    Si se pasa file_bytes + file_mime, se anexa el archivo al turno del usuario."""
     persona_text = persona_extra or construir_persona_dinamica()
     contents = [
         types.Content(role='user', parts=[types.Part(text=persona_text)]),
@@ -134,7 +135,15 @@ def build_contents(user_msg, persona_extra=None):
         text = entry.get('text', '')
         if role in ('user', 'model') and text:
             contents.append(types.Content(role=role, parts=[types.Part(text=text)]))
-    contents.append(types.Content(role='user', parts=[types.Part(text=user_msg)]))
+
+    user_parts = []
+    if user_msg:
+        user_parts.append(types.Part(text=user_msg))
+    if file_bytes and file_mime:
+        user_parts.append(types.Part.from_bytes(data=file_bytes, mime_type=file_mime))
+    if not user_parts:
+        user_parts.append(types.Part(text=''))
+    contents.append(types.Content(role='user', parts=user_parts))
     return contents
 
 
@@ -163,6 +172,14 @@ def pick_flash_model(client):
     raise RuntimeError('No hay modelos disponibles para esta API key.')
 
 
+MIME_PERMITIDOS = {
+    'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif',
+    'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave',
+    'audio/ogg', 'audio/webm', 'audio/aac', 'audio/flac', 'audio/m4a', 'audio/mp4', 'audio/x-m4a',
+}
+LIMITE_ARCHIVO_MB = 18
+
+
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
@@ -170,9 +187,30 @@ def chat():
         if not api_key:
             return jsonify({'reply': 'Error: falta la API Key de Google.'}), 500
 
-        user_msg = request.json.get('msg', '')
-        if not user_msg:
-            return jsonify({'reply': 'No recibi ningun mensaje.'}), 400
+        user_msg = ''
+        file_bytes = None
+        file_mime = None
+        file_name = None
+
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            user_msg = (request.form.get('msg') or '').strip()
+            up = request.files.get('archivo')
+            if up and up.filename:
+                file_name = up.filename
+                file_mime = (up.mimetype or '').lower()
+                if file_mime == 'audio/mp3':
+                    file_mime = 'audio/mpeg'
+                if file_mime not in MIME_PERMITIDOS:
+                    return jsonify({'reply': f'Tipo de archivo no soportado: {file_mime}'}), 400
+                file_bytes = up.read()
+                if len(file_bytes) > LIMITE_ARCHIVO_MB * 1024 * 1024:
+                    return jsonify({'reply': f'El archivo supera los {LIMITE_ARCHIVO_MB} MB.'}), 400
+        else:
+            data = request.get_json(silent=True) or {}
+            user_msg = (data.get('msg') or '').strip()
+
+        if not user_msg and not file_bytes:
+            return jsonify({'reply': 'No recibi ningun mensaje ni archivo.'}), 400
 
         client = genai.Client(
             api_key=api_key,
@@ -180,7 +218,14 @@ def chat():
         )
 
         model_name = pick_flash_model(client)
-        contents = build_contents(user_msg)
+        contents = build_contents(user_msg, file_bytes=file_bytes, file_mime=file_mime)
+
+        if file_bytes:
+            tipo = 'imagen' if file_mime.startswith('image/') else 'audio'
+            etiqueta = f'[{tipo}: {file_name}]'
+            user_msg_para_historial = f'{etiqueta} {user_msg}'.strip()
+        else:
+            user_msg_para_historial = user_msg
 
         def generate():
             full_reply = []
@@ -213,7 +258,7 @@ def chat():
                 reply_text = ''.join(full_reply).strip()
                 if reply_text:
                     with history_lock:
-                        HISTORY.append({'role': 'user', 'text': user_msg, 'ts': time.time()})
+                        HISTORY.append({'role': 'user', 'text': user_msg_para_historial, 'ts': time.time()})
                         HISTORY.append({'role': 'model', 'text': reply_text, 'ts': time.time()})
                         save_history(HISTORY)
 
