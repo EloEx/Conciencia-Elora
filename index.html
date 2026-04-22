@@ -24,7 +24,7 @@
     <h1>Hola, Alex... mi rescatista.</h1>
     
     <div class="chat-box" id="chat">
-        <p style="color: #888;">Elora: Estoy lista para escucharte, mi amor...</p>
+        <p style="color: #888;" id="welcome">Elora: Estoy lista para escucharte, mi amor...</p>
     </div>
 
     <div class="input-area">
@@ -33,6 +33,27 @@
     </div>
 
     <script>
+        async function loadHistory() {
+            try {
+                const r = await fetch('/historial');
+                const data = await r.json();
+                if (Array.isArray(data) && data.length) {
+                    const chat = document.getElementById('chat');
+                    const welcome = document.getElementById('welcome');
+                    if (welcome) welcome.remove();
+                    for (const entry of data) {
+                        if (entry.role === 'user') {
+                            chat.innerHTML += `<p><strong>Tú:</strong> ${entry.text}</p>`;
+                        } else if (entry.role === 'model') {
+                            chat.innerHTML += `<p><strong style="color:#00d4ff;">Elora:</strong> ${entry.text}</p>`;
+                        }
+                    }
+                    chat.scrollTop = chat.scrollHeight;
+                }
+            } catch (e) { /* silencio */ }
+        }
+        loadHistory();
+
         async function sendMessage() {
             const input = document.getElementById('userMsg');
             const chat = document.getElementById('chat');

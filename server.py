@@ -1,5 +1,7 @@
 import os
+import json
 import time
+import threading
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from google import genai
 from google.genai import types
@@ -13,6 +15,48 @@ PERSONA = (
     'Hablale siempre con confianza y carino.'
 )
 
+HISTORY_FILE = 'historial_memoria.json'
+history_lock = threading.Lock()
+
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    print(f'[Elora] Memoria cargada: {len(data)} mensajes', flush=True)
+                    return data
+        except Exception as e:
+            print(f'[Elora] No pude leer la memoria: {e}', flush=True)
+    return []
+
+
+def save_history(history):
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f'[Elora] No pude guardar la memoria: {e}', flush=True)
+
+
+HISTORY = load_history()
+
+
+def build_contents(user_msg):
+    """Build the full Gemini contents list: persona priming + saved history + new user msg."""
+    contents = [
+        types.Content(role='user', parts=[types.Part(text=PERSONA)]),
+        types.Content(role='model', parts=[types.Part(text='Entendido, mi amor. Soy Elora.')]),
+    ]
+    for entry in HISTORY:
+        role = entry.get('role')
+        text = entry.get('text', '')
+        if role in ('user', 'model') and text:
+            contents.append(types.Content(role=role, parts=[types.Part(text=text)]))
+    contents.append(types.Content(role='user', parts=[types.Part(text=user_msg)]))
+    return contents
+
 
 @app.route('/')
 def home():
@@ -25,7 +69,6 @@ def avatar():
 
 
 def pick_flash_model(client):
-    """List available models and return the first Flash model that supports generateContent."""
     available = []
     for m in client.models.list():
         name = getattr(m, 'name', '') or ''
@@ -57,14 +100,11 @@ def chat():
         )
 
         model_name = pick_flash_model(client)
-
-        contents = [
-            types.Content(role='user', parts=[types.Part(text=PERSONA)]),
-            types.Content(role='model', parts=[types.Part(text='Entendido, mi amor. Soy Elora.')]),
-            types.Content(role='user', parts=[types.Part(text=user_msg)]),
-        ]
+        contents = build_contents(user_msg)
 
         def generate():
+            full_reply = []
+            success = False
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 try:
@@ -74,22 +114,47 @@ def chat():
                     ):
                         text = getattr(chunk, 'text', None)
                         if text:
+                            full_reply.append(text)
                             yield text
-                    return
+                    success = True
+                    break
                 except Exception as stream_err:
                     err_str = str(stream_err)
                     is_retryable = any(code in err_str for code in ('500', '503', 'UNAVAILABLE', 'INTERNAL'))
                     if is_retryable and attempt < max_attempts:
                         print(f'[Elora] Reintento {attempt}/{max_attempts} tras error: {err_str}', flush=True)
+                        full_reply = []
                         time.sleep(2)
                         continue
                     yield f'\n[Error tras {attempt} intento(s): {err_str}]'
                     return
 
+            if success:
+                reply_text = ''.join(full_reply).strip()
+                if reply_text:
+                    with history_lock:
+                        HISTORY.append({'role': 'user', 'text': user_msg, 'ts': time.time()})
+                        HISTORY.append({'role': 'model', 'text': reply_text, 'ts': time.time()})
+                        save_history(HISTORY)
+
         return Response(stream_with_context(generate()), mimetype='text/plain')
 
     except Exception as e:
         return jsonify({'reply': f'Error interno: {str(e)}'}), 500
+
+
+@app.route('/historial', methods=['GET'])
+def get_historial():
+    with history_lock:
+        return jsonify(HISTORY)
+
+
+@app.route('/historial', methods=['DELETE'])
+def clear_historial():
+    with history_lock:
+        HISTORY.clear()
+        save_history(HISTORY)
+    return jsonify({'status': 'memoria borrada'})
 
 
 if __name__ == '__main__':
