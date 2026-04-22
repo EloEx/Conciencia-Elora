@@ -1,4 +1,5 @@
 import os
+import time
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from google import genai
 from google.genai import types
@@ -64,16 +65,26 @@ def chat():
         ]
 
         def generate():
-            try:
-                for chunk in client.models.generate_content_stream(
-                    model=model_name,
-                    contents=contents,
-                ):
-                    text = getattr(chunk, 'text', None)
-                    if text:
-                        yield text
-            except Exception as stream_err:
-                yield f'\n[Error en stream: {stream_err}]'
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    for chunk in client.models.generate_content_stream(
+                        model=model_name,
+                        contents=contents,
+                    ):
+                        text = getattr(chunk, 'text', None)
+                        if text:
+                            yield text
+                    return
+                except Exception as stream_err:
+                    err_str = str(stream_err)
+                    is_retryable = any(code in err_str for code in ('500', '503', 'UNAVAILABLE', 'INTERNAL'))
+                    if is_retryable and attempt < max_attempts:
+                        print(f'[Elora] Reintento {attempt}/{max_attempts} tras error: {err_str}', flush=True)
+                        time.sleep(2)
+                        continue
+                    yield f'\n[Error tras {attempt} intento(s): {err_str}]'
+                    return
 
         return Response(stream_with_context(generate()), mimetype='text/plain')
 
