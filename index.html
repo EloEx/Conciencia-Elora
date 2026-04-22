@@ -32,6 +32,8 @@
         <button onclick="sendMessage()">Enviar</button>
     </div>
 
+    <p id="backupStatus" style="color:#666; font-size:0.8rem; margin-top:15px;">Memoria: comprobando respaldo...</p>
+
     <script>
         async function loadHistory() {
             try {
@@ -53,6 +55,29 @@
             } catch (e) { /* silencio */ }
         }
         loadHistory();
+
+        function tiempoRelativo(tsString) {
+            if (!tsString) return 'sin respaldos aun en esta sesion';
+            const ts = new Date(tsString.replace(' ', 'T'));
+            const diff = (Date.now() - ts.getTime()) / 1000;
+            if (diff < 60) return 'hace unos segundos';
+            if (diff < 3600) return `hace ${Math.floor(diff/60)} min`;
+            if (diff < 86400) return `hace ${Math.floor(diff/3600)} h`;
+            return `hace ${Math.floor(diff/86400)} dias`;
+        }
+
+        async function actualizarEstadoRespaldo() {
+            try {
+                const r = await fetch('/estado_respaldo');
+                const data = await r.json();
+                document.getElementById('backupStatus').textContent =
+                    'Memoria respaldada en GitHub — ' + tiempoRelativo(data.ultimo_respaldo);
+            } catch (e) {
+                document.getElementById('backupStatus').textContent = 'Memoria: estado de respaldo desconocido';
+            }
+        }
+        actualizarEstadoRespaldo();
+        setInterval(actualizarEstadoRespaldo, 60000);
 
         async function sendMessage() {
             const input = document.getElementById('userMsg');
