@@ -52,7 +52,7 @@ def chat():
 
         client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(api_version='v1'),
+            http_options=types.HttpOptions(api_version='v1', timeout=120000),
         )
 
         model_name = pick_flash_model(client)
@@ -74,4 +74,4 @@ def chat():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
