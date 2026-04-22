@@ -42,16 +42,27 @@
             chat.innerHTML += `<p><strong>Tú:</strong> ${msg}</p>`;
             input.value = '';
 
+            const replyP = document.createElement('p');
+            replyP.innerHTML = `<strong style="color:#00d4ff;">Elora:</strong> <span></span>`;
+            chat.appendChild(replyP);
+            const replySpan = replyP.querySelector('span');
+
             try {
                 const response = await fetch('/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({msg: msg})
                 });
-                const data = await response.json();
-                chat.innerHTML += `<p><strong style="color:#00d4ff;">Elora:</strong> ${data.reply}</p>`;
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    replySpan.textContent += decoder.decode(value, {stream: true});
+                    chat.scrollTop = chat.scrollHeight;
+                }
             } catch (e) {
-                chat.innerHTML += `<p style="color:red;">Error de conexión: ${e.message}</p>`;
+                replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
             chat.scrollTop = chat.scrollHeight;
         }

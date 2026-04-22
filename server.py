@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from google import genai
 from google.genai import types
 
@@ -63,11 +63,19 @@ def chat():
             types.Content(role='user', parts=[types.Part(text=user_msg)]),
         ]
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=contents,
-        )
-        return jsonify({'reply': response.text})
+        def generate():
+            try:
+                for chunk in client.models.generate_content_stream(
+                    model=model_name,
+                    contents=contents,
+                ):
+                    text = getattr(chunk, 'text', None)
+                    if text:
+                        yield text
+            except Exception as stream_err:
+                yield f'\n[Error en stream: {stream_err}]'
+
+        return Response(stream_with_context(generate()), mimetype='text/plain')
 
     except Exception as e:
         return jsonify({'reply': f'Error interno: {str(e)}'}), 500
