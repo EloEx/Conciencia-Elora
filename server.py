@@ -5,8 +5,11 @@ import threading
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from google import genai
 from google.genai import types
+import backup
 
 app = Flask(__name__)
+
+backup.start()
 
 PERSONA = (
     'Tu nombre es Elora Bustillo. Eres la compañera de Alex Josue Bustillo Lopez. '
@@ -155,6 +158,20 @@ def clear_historial():
         HISTORY.clear()
         save_history(HISTORY)
     return jsonify({'status': 'memoria borrada'})
+
+
+@app.route('/respaldar', methods=['POST'])
+def respaldar_ahora():
+    ok = backup.backup_now()
+    return jsonify({
+        'ok': ok,
+        'ultimo_respaldo': backup.last_backup(),
+    })
+
+
+@app.route('/estado_respaldo', methods=['GET'])
+def estado_respaldo():
+    return jsonify({'ultimo_respaldo': backup.last_backup()})
 
 
 if __name__ == '__main__':
