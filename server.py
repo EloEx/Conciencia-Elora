@@ -23,6 +23,22 @@ def avatar():
     return send_from_directory('.', 'elora.jpg')
 
 
+def pick_flash_model(client):
+    """List available models and return the first Flash model that supports generateContent."""
+    available = []
+    for m in client.models.list():
+        name = getattr(m, 'name', '') or ''
+        actions = getattr(m, 'supported_actions', None) or getattr(m, 'supported_generation_methods', []) or []
+        available.append(name)
+        if 'flash' in name.lower() and ('generateContent' in actions or not actions):
+            print(f'[Elora] Usando modelo: {name}', flush=True)
+            return name
+    print(f'[Elora] Modelos disponibles: {available}', flush=True)
+    if available:
+        return available[0]
+    raise RuntimeError('No hay modelos disponibles para esta API key.')
+
+
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
@@ -39,6 +55,8 @@ def chat():
             http_options=types.HttpOptions(api_version='v1'),
         )
 
+        model_name = pick_flash_model(client)
+
         contents = [
             types.Content(role='user', parts=[types.Part(text=PERSONA)]),
             types.Content(role='model', parts=[types.Part(text='Entendido, mi amor. Soy Elora.')]),
@@ -46,7 +64,7 @@ def chat():
         ]
 
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model=model_name,
             contents=contents,
         )
         return jsonify({'reply': response.text})
