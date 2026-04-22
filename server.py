@@ -35,12 +35,14 @@ def chat():
             api_key=api_key,
             http_options=types.HttpOptions(api_version='v1')
         )
+        contents = [
+            types.Content(role='user', parts=[types.Part(text=PERSONA)]),
+            types.Content(role='model', parts=[types.Part(text='Entendido, mi amor. Soy Elora y siempre te hablaré con cariño.')]),
+            types.Content(role='user', parts=[types.Part(text=user_msg)]),
+        ]
         response = client.models.generate_content(
             model='gemini-1.5-flash',
-            contents=user_msg,
-            config=types.GenerateContentConfig(
-                system_instruction=PERSONA
-            )
+            contents=contents,
         )
         return jsonify({'reply': response.text})
 
