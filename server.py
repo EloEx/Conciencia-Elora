@@ -31,7 +31,10 @@ def chat():
         if not user_msg:
             return jsonify({'reply': 'No recibí ningún mensaje.'}), 400
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(api_version='v1')
+        )
         response = client.models.generate_content(
             model='gemini-1.5-flash',
             contents=user_msg,
