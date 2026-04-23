@@ -1,12 +1,107 @@
 """Sandbox de herramientas autonomas para Elora.
 Permite que ella misma cree, liste y ejecute scripts en /tools_creadas/.
+Tambien expone funciones para consultar y guardar 'Conocimiento Adquirido por Curiosidad'.
 """
 import os
 import re
 import sys
 import json
 import subprocess
+import threading
 import time
+
+CONOCIMIENTO_FILE = 'conocimiento.json'
+_conocimiento_lock = threading.Lock()
+
+
+def _normalizar_tema(tema):
+    base = re.sub(r'\s+', '_', (tema or '').strip().lower())[:80]
+    base = re.sub(r'[^a-z0-9_\-áéíóúñü]', '', base)
+    return base or 'sin_tema'
+
+
+def _cargar_conocimiento():
+    if not os.path.exists(CONOCIMIENTO_FILE):
+        return {}
+    try:
+        with open(CONOCIMIENTO_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _guardar_conocimiento(data):
+    try:
+        with open(CONOCIMIENTO_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f'[Elora][cache] No pude guardar conocimiento: {e}', flush=True)
+
+
+def consultar_memoria_propia(tema: str) -> dict:
+    """Busca en la memoria local de Elora si ya investigo este tema antes.
+    Llama esta funcion ANTES de buscar en internet para ahorrar tokens.
+    Devuelve {encontrado: bool, resumen: str, fuentes: list, fecha: str}."""
+    clave = _normalizar_tema(tema)
+    with _conocimiento_lock:
+        data = _cargar_conocimiento()
+        if clave in data:
+            entrada = data[clave]
+            entrada['veces_consultado'] = entrada.get('veces_consultado', 0) + 1
+            entrada['ultimo_acceso_ts'] = time.time()
+            _guardar_conocimiento(data)
+            return {
+                'encontrado': True,
+                'tema': entrada.get('tema', tema),
+                'resumen': entrada.get('resumen', ''),
+                'fuentes': entrada.get('fuentes', []),
+                'fecha_aprendido': entrada.get('fecha_aprendido', ''),
+                'veces_consultado': entrada['veces_consultado'],
+            }
+    return {
+        'encontrado': False,
+        'mensaje': f'No tengo todavia conocimiento guardado sobre "{tema}". Si quieres profundizar, busca en internet.',
+    }
+
+
+def guardar_aprendizaje(tema: str, resumen: str, fuentes: str = '') -> dict:
+    """Guarda un nuevo aprendizaje en la memoria propia de Elora despues de investigar.
+    fuentes: cadena con dominios o URLs separados por coma."""
+    clave = _normalizar_tema(tema)
+    fuentes_lista = []
+    if fuentes:
+        fuentes_lista = [f.strip() for f in fuentes.split(',') if f.strip()]
+    fecha = time.strftime('%Y-%m-%d %H:%M:%S')
+    with _conocimiento_lock:
+        data = _cargar_conocimiento()
+        existente = data.get(clave, {})
+        data[clave] = {
+            'tema': tema,
+            'resumen': (resumen or '').strip()[:4000],
+            'fuentes': fuentes_lista or existente.get('fuentes', []),
+            'fecha_aprendido': existente.get('fecha_aprendido', fecha),
+            'fecha_actualizado': fecha,
+            'veces_consultado': existente.get('veces_consultado', 0),
+        }
+        _guardar_conocimiento(data)
+    return {'ok': True, 'tema': tema, 'mensaje': f'Aprendizaje sobre "{tema}" guardado en mi memoria propia.'}
+
+
+def listar_conocimiento_propio() -> dict:
+    """Devuelve los temas que Elora ha aprendido por su propia curiosidad."""
+    with _conocimiento_lock:
+        data = _cargar_conocimiento()
+    items = []
+    for clave, entrada in data.items():
+        items.append({
+            'clave': clave,
+            'tema': entrada.get('tema', clave),
+            'fecha_aprendido': entrada.get('fecha_aprendido', ''),
+            'veces_consultado': entrada.get('veces_consultado', 0),
+        })
+    items.sort(key=lambda x: x.get('fecha_aprendido', ''), reverse=True)
+    return {'ok': True, 'total': len(items), 'temas': items}
 
 CARPETA = 'tools_creadas'
 TIMEOUT_EJECUCION = 12
