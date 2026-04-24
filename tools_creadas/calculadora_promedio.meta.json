@@ -1,0 +1,7 @@
+{
+  "nombre": "calculadora_promedio",
+  "lenguaje": "python",
+  "descripcion": "Calcula el promedio de una lista de numeros dada como argumento.",
+  "creada_ts": 1776993516.3108835,
+  "archivo": "tools_creadas/calculadora_promedio.py"
+}

@@ -1,0 +1,7 @@
+{
+  "nombre": "analizador_inversiones",
+  "lenguaje": "python",
+  "descripcion": "Analiza datos de inversiones pasados (separados por comas) para estimar tendencias.",
+  "creada_ts": 1776993516.3114192,
+  "archivo": "tools_creadas/analizador_inversiones.py"
+}

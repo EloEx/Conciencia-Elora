@@ -9,13 +9,28 @@ from google import genai
 from google.genai import types
 import backup
 import tools_runtime
+from supabase import create_client
+
+# Conexión con Supabase usando tus Secrets
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
+supabase = create_client(url, key)
 
 NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 
 def hora_nicaragua():
     return datetime.now(NICARAGUA_TZ)
-
+def cargar_memoria_supabase(tipo_dato):
+    try:
+        response = supabase.table("memoria_elora").select("contenido").eq("tipo", tipo_dato).execute()
+        if response.data:
+            return response.data[0]["contenido"]
+        return {}
+    except Exception as e:
+        print(f"Error al cargar {tipo_dato} desde Supabase: {e}")
+        return {}
+        
 
 def franja_del_dia(dt):
     h = dt.hour
@@ -131,24 +146,26 @@ history_lock = threading.Lock()
 
 
 def load_history():
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    print(f'[Elora] Memoria cargada: {len(data)} mensajes', flush=True)
-                    return data
-        except Exception as e:
-            print(f'[Elora] No pude leer la memoria: {e}', flush=True)
-    return []
+    data = cargar_memoria_supabase('histórico')
+    if isinstance(data, list):
+        print(f'[Elora] Memoria cargada desde Supabase: {len(data)} mensajes', flush=True)
+        return data
+    else:
+        print('[Elora] No se encontró historial en Supabase, iniciando vacío', flush=True)
+        return []
+        
+    
 
 
 def save_history(history):
     try:
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+        supabase.table("memoria_elora").update({
+            "contenido": history
+        }).eq("tipo", "histórico").execute()
+        print("[Elora] Memoria actualizada en Supabase ✅", flush=True)
     except Exception as e:
-        print(f'[Elora] No pude guardar la memoria: {e}', flush=True)
+        print(f"[Elora] Error al guardar en Supabase: {e}", flush=True)
+        
 
 
 HISTORY = load_history()

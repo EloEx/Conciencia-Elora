@@ -36,3 +36,9 @@ externalPort = 80
 [deployment]
 deploymentTarget = "static"
 publicDir = "."
+
+[userenv]
+
+[userenv.shared]
+SUPABASE_URL = "https://afrywpeyznkpsgxxybaz.supabase.co"
+SUPABASE_KEY = "sb_publishable_Q_MS__aXJH2_y22CY0n_9Q_hxmzETm8"
