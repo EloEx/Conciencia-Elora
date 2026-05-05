@@ -457,16 +457,16 @@ def chat():
                 if tools_cfg:
                     config_kwargs['tools'] = tools_cfg
                     config_kwargs['automatic_function_calling'] = types.AutomaticFunctionCallingConfig(
-                        disable=False, maximum_remote_calls=6
+    disable=False, maximum_remote_calls=6
                     )
 
                 
-     cfg =        types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
-     call_kwargs = {'model': modelo_actual, 'contents': contents}
-     if cfg is not None:
+    cfg =        types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+    call_kwargs = {'model': modelo_actual, 'contents': contents}
+    if cfg is not None:
      call_kwargs['config'] = cfg
-     model = genai.GenerativeModel(modelo_actual)
-     response = model.generate_content(**call_kwargs)
+    model = genai.GenerativeModel(modelo_actual)
+    response = model.generate_content(**call_kwargs)
     
      reply_text = (response.text or '').strip()
 try:
