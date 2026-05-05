@@ -461,15 +461,15 @@ def chat():
                     )
 
                 
-cfg = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
-call_kwargs = {'model': modelo_actual, 'contents': contents}
-if cfg is not None:
-                        call_kwargs['config'] = cfg
-model = genai.GenerativeModel(modelo_actual)
-response = model.generate_content(**call_kwargs)
+     cfg =        types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+     call_kwargs = {'model': modelo_actual, 'contents': contents}
+     if cfg is not None:
+     call_kwargs['config'] = cfg
+     model = genai.GenerativeModel(modelo_actual)
+     response = model.generate_content(**call_kwargs)
     
-                    reply_text = (response.text or '').strip()
-                    try:
+     reply_text = (response.text or '').strip()
+try:
                         cands = getattr(response, 'candidates', None) or []
                         for c in cands:
                             gm = getattr(c, 'grounding_metadata', None)
