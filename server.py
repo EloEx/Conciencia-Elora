@@ -5,8 +5,8 @@ import time
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
 import backup
 import tools_runtime
 from supabase import create_client
