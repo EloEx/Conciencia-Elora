@@ -460,13 +460,13 @@ def chat():
                         disable=False, maximum_remote_calls=6
                     )
 
-                try:
-                    cfg = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
-                    call_kwargs = {'model': modelo_actual, 'contents': contents}
-                    if cfg is not None:
+                
+cfg = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+call_kwargs = {'model': modelo_actual, 'contents': contents}
+if cfg is not None:
                         call_kwargs['config'] = cfg
-    model = genai.GenerativeModel(modelo_actual)
-    response = model.generate_content(**call_kwargs)
+model = genai.GenerativeModel(modelo_actual)
+response = model.generate_content(**call_kwargs)
     
                     reply_text = (response.text or '').strip()
                     try:
