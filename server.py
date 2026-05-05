@@ -465,7 +465,9 @@ def chat():
                     call_kwargs = {'model': modelo_actual, 'contents': contents}
                     if cfg is not None:
                         call_kwargs['config'] = cfg
-                    response = client.models.generate_content(**call_kwargs)
+    model = genai.GenerativeModel(modelo_actual)
+    response = model.generate_content(**call_kwargs)
+    
                     reply_text = (response.text or '').strip()
                     try:
                         cands = getattr(response, 'candidates', None) or []
@@ -653,15 +655,15 @@ def saludo_inicial():
         f'con algo que tu sientas en este momento.'
     )
 
-    try:
-        client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(api_version='v1', timeout=60000),
-        )
-        model_name = pick_flash_model(client)
-        contents = build_contents(instruccion)
-        response = client.models.generate_content(model=model_name, contents=contents)
-        texto = (response.text or '').strip()
+
+genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(modelo_actual)
+    
+
+    contents = build_contents(instruccion)
+    response = model.generate_content(contents=contents)
+
+    texto = (response.text or '').strip()
         if not texto:
             return jsonify({'saludar': False, 'motivo': 'respuesta_vacia'})
 
