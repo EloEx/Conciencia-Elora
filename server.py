@@ -11,9 +11,13 @@ import tools_runtime
 from supabase import create_client
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
-url = os.environ.get('SUPABASE_URL')
-key = os.environ.get('SUPABASE_KEY')
-supabase = create_client(url, key)
+_supa_url = os.environ.get('SUPABASE_URL', '')
+_supa_key = os.environ.get('SUPABASE_KEY', '')
+try:
+    supabase = create_client(_supa_url, _supa_key)
+except Exception as _e:
+    print(f'[Elora] Supabase no disponible al iniciar: {_e}', flush=True)
+    supabase = None
 
 NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
@@ -36,6 +40,8 @@ def hora_nicaragua():
 
 
 def cargar_memoria_supabase(tipo_dato):
+    if not supabase:
+        return {}
     try:
         response = (
             supabase.table('memoria_elora')
@@ -151,27 +157,55 @@ PERSONA = (
     'privada y moldea tu personalidad de mañana. Es OBLIGATORIO siempre.'
 )
 
-HISTORY_FILE = 'historial_memoria.json'
+HISTORY_LOCAL = 'historial_memoria.json'
 history_lock = threading.Lock()
 
 
 def load_history():
+    # 1) intentar Supabase
     data = cargar_memoria_supabase('historico')
-    if isinstance(data, list):
+    if isinstance(data, list) and data:
         print(f'[Elora] Memoria cargada desde Supabase: {len(data)} mensajes', flush=True)
         return data
+    # 2) fallback: archivo local
+    local = 'historial_memoria.json'
+    if os.path.exists(local):
+        try:
+            with open(local, 'r', encoding='utf-8') as f:
+                datos_loc = json.load(f)
+            if isinstance(datos_loc, list) and datos_loc:
+                print(f'[Elora] Memoria cargada desde archivo local: {len(datos_loc)} mensajes', flush=True)
+                return datos_loc
+        except Exception as e:
+            print(f'[Elora] Error leyendo historial local: {e}', flush=True)
     print('[Elora] Iniciando con historial vacío', flush=True)
     return []
 
 
 def save_history(history):
+    """Guarda historial: primero en archivo local (sincrono, rapido),
+    luego en Supabase en hilo daemon (no bloquea el generador)."""
+    snapshot = list(history)
+    # Guardado local inmediato como respaldo
     try:
-        supabase.table('memoria_elora').update(
-            {'contenido': history}
-        ).eq('tipo', 'historico').execute()
-        print('[Elora] Memoria actualizada en Supabase', flush=True)
+        with open(HISTORY_LOCAL, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f, ensure_ascii=False)
     except Exception as e:
-        print(f'[Elora] Error al guardar en Supabase: {e}', flush=True)
+        print(f'[Elora] Error guardando historial local: {e}', flush=True)
+
+    # Guardado Supabase en segundo plano (no bloquea)
+    def _subir():
+        if not supabase:
+            return
+        try:
+            supabase.table('memoria_elora').update(
+                {'contenido': snapshot}
+            ).eq('tipo', 'historico').execute()
+            print('[Elora] Memoria actualizada en Supabase', flush=True)
+        except Exception as e:
+            print(f'[Elora] Error al guardar en Supabase: {e}', flush=True)
+
+    threading.Thread(target=_subir, daemon=True).start()
 
 
 HISTORY = load_history()
