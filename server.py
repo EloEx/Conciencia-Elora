@@ -207,26 +207,53 @@ history_lock = threading.Lock()
 def load_history():
     """Carga, fusiona y normaliza el historial desde TODAS las fuentes disponibles.
 
-    Prioridad: Supabase + archivo local se fusionan (union por deduplicación).
-    El resultado siempre queda ordenado ASC por ts (más antiguo primero).
-    Todos los formatos (Gemini parts, OpenAI content, formato interno text) se convierten.
+    Supabase es la FUENTE DE VERDAD ABSOLUTA.
+    - Se cargan ambas fuentes (Supabase + local) y se fusionan.
+    - Si el local tiene mensajes más recientes (p.ej. tras una outage), se suben
+      a Supabase de forma SINCRONA en el arranque para no perderlos.
+    - El archivo local se sobreescribe con el dataset canónico fusionado.
+    - Todo queda ordenado ASC por ts (más antiguo primero).
     """
     candidatos = []
+    supa_ts_max = 0.0
+    supa_count = 0
 
-    # 1) Supabase
+    # ── 1. Supabase (fuente primaria) ─────────────────────────────────────────
     data_supa = cargar_memoria_supabase('historico')
-    if isinstance(data_supa, list):
-        print(f'[Elora] Supabase: {len(data_supa)} entradas crudas.', flush=True)
+    if isinstance(data_supa, list) and data_supa:
+        supa_count = len(data_supa)
+        supa_ts_max = max(
+            (float(e.get('ts', 0)) for e in data_supa if isinstance(e, dict)),
+            default=0.0,
+        )
         candidatos.extend(data_supa)
+        print(
+            f'[Elora] Supabase: {supa_count} entradas, '
+            f'más reciente {datetime.fromtimestamp(supa_ts_max, NICARAGUA_TZ).strftime("%Y-%m-%d %H:%M")} NIC.',
+            flush=True,
+        )
+    else:
+        print('[Elora] Supabase: sin datos (vacío o no disponible).', flush=True)
 
-    # 2) Archivo local (siempre leer, aunque Supabase haya respondido)
+    # ── 2. Archivo local (suplemento: captura mensajes guardados en outages) ──
+    loc_ts_max = 0.0
+    loc_count = 0
     if os.path.exists(HISTORY_LOCAL):
         try:
             with open(HISTORY_LOCAL, 'r', encoding='utf-8') as f:
                 data_loc = json.load(f)
-            if isinstance(data_loc, list):
-                print(f'[Elora] Local: {len(data_loc)} entradas crudas.', flush=True)
+            if isinstance(data_loc, list) and data_loc:
+                loc_count = len(data_loc)
+                loc_ts_max = max(
+                    (float(e.get('ts', 0)) for e in data_loc if isinstance(e, dict)),
+                    default=0.0,
+                )
                 candidatos.extend(data_loc)
+                print(
+                    f'[Elora] Local: {loc_count} entradas, '
+                    f'más reciente {datetime.fromtimestamp(loc_ts_max, NICARAGUA_TZ).strftime("%Y-%m-%d %H:%M")} NIC.',
+                    flush=True,
+                )
         except Exception as e:
             print(f'[Elora] Error leyendo historial local: {e}', flush=True)
 
@@ -234,12 +261,12 @@ def load_history():
         print('[Elora] Iniciando con historial vacío.', flush=True)
         return []
 
-    # 3) Normalizar formato (Gemini → interno, OpenAI content → texto, etc.)
+    # ── 3. Normalizar (Gemini parts / OpenAI content / interno text) ──────────
     normalizados = [normalizar_entrada(e) for e in candidatos]
     normalizados = [e for e in normalizados if e is not None]
 
-    # 4) Deduplicar: clave = (role, primeros-80-chars, ts redondeado a 1s)
-    seen = set()
+    # ── 4. Deduplicar por (role, texto[:80], ts redondeado) ───────────────────
+    seen: set = set()
     unicos = []
     for e in normalizados:
         clave = (e['role'], e['text'][:80], round(e['ts']))
@@ -247,37 +274,67 @@ def load_history():
             seen.add(clave)
             unicos.append(e)
 
-    # 5) Ordenar ESTRICTAMENTE por ts, más antiguo primero
+    # ── 5. Ordenar ESTRICTAMENTE por ts ASC (más antiguo primero) ─────────────
     unicos.sort(key=lambda x: x['ts'])
 
+    merged_ts_max = unicos[-1]['ts'] if unicos else 0.0
     print(
-        f'[Elora] Memoria lista: {len(unicos)} mensajes únicos, '
-        f'más reciente ts={unicos[-1]["ts"]:.0f} '
-        f'({datetime.fromtimestamp(unicos[-1]["ts"], NICARAGUA_TZ).strftime("%Y-%m-%d %H:%M")} NIC).',
+        f'[Elora] Memoria canónica: {len(unicos)} mensajes únicos, '
+        f'más reciente {datetime.fromtimestamp(merged_ts_max, NICARAGUA_TZ).strftime("%Y-%m-%d %H:%M")} NIC.',
         flush=True,
     )
+
+    # ── 6. Sincronizar Supabase si el local tiene datos más recientes ──────────
+    # (ocurre cuando Supabase estuvo caído durante una sesión de chat)
+    necesita_sync = (
+        supabase is not None
+        and (loc_ts_max > supa_ts_max or len(unicos) > supa_count)
+    )
+    if necesita_sync:
+        print(
+            f'[Elora] Local más completo que Supabase '
+            f'({len(unicos)} > {supa_count} msgs). Sincronizando Supabase...',
+            flush=True,
+        )
+        try:
+            supabase.table('memoria_elora').upsert(
+                {'tipo': 'historico', 'contenido': unicos}
+            ).execute()
+            print(f'[Elora] Supabase sincronizado: {len(unicos)} mensajes.', flush=True)
+        except Exception as e:
+            print(f'[Elora] Error sincronizando Supabase al arrancar: {e}', flush=True)
+
+    # ── 7. Sobreescribir local con el dataset canónico (Supabase = verdad) ─────
+    try:
+        with open(HISTORY_LOCAL, 'w', encoding='utf-8') as f:
+            json.dump(unicos, f, ensure_ascii=False)
+        print(f'[Elora] Cache local sincronizado ({len(unicos)} msgs).', flush=True)
+    except Exception as e:
+        print(f'[Elora] Error actualizando cache local: {e}', flush=True)
+
     return unicos
 
 
 def save_history(history):
-    """Guarda historial: local (síncrono, inmediato) + Supabase (daemon, no bloquea).
+    """Persiste el historial.
 
-    Usa upsert en Supabase para que funcione tanto en primer guardado (insert)
-    como en actualizaciones posteriores (update), sin fallas silenciosas.
-    Siempre ordena por ts antes de guardar para garantizar orden cronológico.
+    1. Local: SINCRONO e inmediato (no depende de red).
+    2. Supabase: UPSERT en hilo daemon (insert-or-update, no bloquea el generador).
+       upsert garantiza que funcione tanto en el primer guardado (insert)
+       como en actualizaciones posteriores (update).
+    Siempre ordena por ts antes de guardar.
     """
-    # Ordenar antes de persistir
     snapshot = sorted(list(history), key=lambda x: x.get('ts', 0))
 
-    # 1) Guardado local inmediato (sin red → nunca bloquea)
+    # 1) Local inmediato
     try:
         with open(HISTORY_LOCAL, 'w', encoding='utf-8') as f:
-            json.dump(snapshot, f, ensure_ascii=False, indent=None)
-        print(f'[Elora] Historial local guardado: {len(snapshot)} mensajes.', flush=True)
+            json.dump(snapshot, f, ensure_ascii=False)
+        print(f'[Elora] Local: {len(snapshot)} msgs guardados.', flush=True)
     except Exception as e:
         print(f'[Elora] Error guardando historial local: {e}', flush=True)
 
-    # 2) Supabase en hilo daemon (upsert = insert-or-update)
+    # 2) Supabase en daemon (upsert = insert-or-update)
     def _subir():
         if not supabase:
             return
@@ -285,7 +342,7 @@ def save_history(history):
             supabase.table('memoria_elora').upsert(
                 {'tipo': 'historico', 'contenido': snapshot}
             ).execute()
-            print(f'[Elora] Supabase actualizado: {len(snapshot)} mensajes.', flush=True)
+            print(f'[Elora] Supabase: {len(snapshot)} msgs guardados.', flush=True)
         except Exception as e:
             print(f'[Elora] Error al guardar en Supabase: {e}', flush=True)
 
