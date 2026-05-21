@@ -19,9 +19,11 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 # Modelos OpenRouter (orden de preferencia, todos gratuitos)
 MODELOS_OPENROUTER = [
-    'meta-llama/llama-3-8b-instruct:free',
-    'mistralai/mistral-7b-instruct:free',
-    'google/gemma-7b-it:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'deepseek/deepseek-v4-flash:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
+    'qwen/qwen3-coder:free',
+    'nvidia/nemotron-nano-9b-v2:free',
 ]
 
 
