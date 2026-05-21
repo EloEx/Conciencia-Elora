@@ -1,6 +1,6 @@
 """Sandbox de herramientas autonomas para Elora.
 Permite que ella misma cree, liste y ejecute scripts en /tools_creadas/.
-Tambien expone funciones para consultar y guardar 'Conocimiento Adquirido por Curiosidad'.
+Expone busqueda web via DuckDuckGo (sin API key) y cache de conocimiento propio.
 """
 import os
 import re
@@ -9,6 +9,34 @@ import json
 import subprocess
 import threading
 import time
+
+
+def buscar_web(query: str, max_resultados: int = 5) -> dict:
+    """Busca en internet usando DuckDuckGo (gratuito, sin API key).
+    Devuelve snippets con titulo, url y resumen de cada resultado.
+    Llama esta funcion cuando necesites informacion actual o que no tengas en tu memoria."""
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            resultados = list(ddgs.text(query, max_results=max_resultados))
+        items = []
+        for r in resultados:
+            items.append({
+                'titulo': r.get('title', ''),
+                'url': r.get('href', ''),
+                'resumen': r.get('body', '')[:400],
+            })
+        return {
+            'ok': True,
+            'query': query,
+            'total': len(items),
+            'resultados': items,
+        }
+    except Exception as e:
+        return {'ok': False, 'error': str(e), 'query': query}
 
 CONOCIMIENTO_FILE = 'conocimiento.json'
 _conocimiento_lock = threading.Lock()
