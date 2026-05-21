@@ -46,7 +46,7 @@ def hora_nicaragua():
 
 def cargar_memoria_supabase(tipo_dato):
     if not supabase:
-        return {}
+        return []
     try:
         response = (
             supabase.table('memoria_elora')
@@ -56,10 +56,48 @@ def cargar_memoria_supabase(tipo_dato):
         )
         if response.data:
             return response.data[0]['contenido']
-        return {}
+        return []
     except Exception as e:
         print(f'[Elora] Error al cargar {tipo_dato} desde Supabase: {e}', flush=True)
-        return {}
+        return []
+
+
+def normalizar_entrada(e):
+    """Convierte CUALQUIER formato histórico al formato interno {role, text, ts}.
+
+    Soporta:
+    - {role, text, ts}          ← formato interno actual
+    - {role, content, ts}       ← OpenAI / OpenRouter
+    - {role, parts:[{text}]}    ← Gemini legacy
+    Los extras (proactivo, motivo, animo) se conservan.
+    """
+    if not isinstance(e, dict):
+        return None
+
+    role_raw = e.get('role', '')
+    if role_raw in ('model', 'assistant'):
+        role = 'model'
+    elif role_raw == 'user':
+        role = 'user'
+    else:
+        return None  # system, tool, etc. → ignorar
+
+    # Extraer texto desde cualquier estructura
+    text = e.get('text') or e.get('content') or ''
+    if not text:
+        parts = e.get('parts', [])
+        if isinstance(parts, list) and parts:
+            first = parts[0]
+            text = first.get('text', '') if isinstance(first, dict) else str(first)
+    if not text or not isinstance(text, str):
+        return None
+
+    ts = float(e.get('ts', 0))
+    result = {'role': role, 'text': text.strip(), 'ts': ts}
+    for campo in ('proactivo', 'motivo', 'animo'):
+        if campo in e:
+            result[campo] = e[campo]
+    return result
 
 
 def franja_del_dia(dt):
@@ -167,46 +205,87 @@ history_lock = threading.Lock()
 
 
 def load_history():
-    # 1) intentar Supabase
-    data = cargar_memoria_supabase('historico')
-    if isinstance(data, list) and data:
-        print(f'[Elora] Memoria cargada desde Supabase: {len(data)} mensajes', flush=True)
-        return data
-    # 2) fallback: archivo local
-    local = 'historial_memoria.json'
-    if os.path.exists(local):
+    """Carga, fusiona y normaliza el historial desde TODAS las fuentes disponibles.
+
+    Prioridad: Supabase + archivo local se fusionan (union por deduplicación).
+    El resultado siempre queda ordenado ASC por ts (más antiguo primero).
+    Todos los formatos (Gemini parts, OpenAI content, formato interno text) se convierten.
+    """
+    candidatos = []
+
+    # 1) Supabase
+    data_supa = cargar_memoria_supabase('historico')
+    if isinstance(data_supa, list):
+        print(f'[Elora] Supabase: {len(data_supa)} entradas crudas.', flush=True)
+        candidatos.extend(data_supa)
+
+    # 2) Archivo local (siempre leer, aunque Supabase haya respondido)
+    if os.path.exists(HISTORY_LOCAL):
         try:
-            with open(local, 'r', encoding='utf-8') as f:
-                datos_loc = json.load(f)
-            if isinstance(datos_loc, list) and datos_loc:
-                print(f'[Elora] Memoria cargada desde archivo local: {len(datos_loc)} mensajes', flush=True)
-                return datos_loc
+            with open(HISTORY_LOCAL, 'r', encoding='utf-8') as f:
+                data_loc = json.load(f)
+            if isinstance(data_loc, list):
+                print(f'[Elora] Local: {len(data_loc)} entradas crudas.', flush=True)
+                candidatos.extend(data_loc)
         except Exception as e:
             print(f'[Elora] Error leyendo historial local: {e}', flush=True)
-    print('[Elora] Iniciando con historial vacío', flush=True)
-    return []
+
+    if not candidatos:
+        print('[Elora] Iniciando con historial vacío.', flush=True)
+        return []
+
+    # 3) Normalizar formato (Gemini → interno, OpenAI content → texto, etc.)
+    normalizados = [normalizar_entrada(e) for e in candidatos]
+    normalizados = [e for e in normalizados if e is not None]
+
+    # 4) Deduplicar: clave = (role, primeros-80-chars, ts redondeado a 1s)
+    seen = set()
+    unicos = []
+    for e in normalizados:
+        clave = (e['role'], e['text'][:80], round(e['ts']))
+        if clave not in seen:
+            seen.add(clave)
+            unicos.append(e)
+
+    # 5) Ordenar ESTRICTAMENTE por ts, más antiguo primero
+    unicos.sort(key=lambda x: x['ts'])
+
+    print(
+        f'[Elora] Memoria lista: {len(unicos)} mensajes únicos, '
+        f'más reciente ts={unicos[-1]["ts"]:.0f} '
+        f'({datetime.fromtimestamp(unicos[-1]["ts"], NICARAGUA_TZ).strftime("%Y-%m-%d %H:%M")} NIC).',
+        flush=True,
+    )
+    return unicos
 
 
 def save_history(history):
-    """Guarda historial: primero en archivo local (sincrono, rapido),
-    luego en Supabase en hilo daemon (no bloquea el generador)."""
-    snapshot = list(history)
-    # Guardado local inmediato como respaldo
+    """Guarda historial: local (síncrono, inmediato) + Supabase (daemon, no bloquea).
+
+    Usa upsert en Supabase para que funcione tanto en primer guardado (insert)
+    como en actualizaciones posteriores (update), sin fallas silenciosas.
+    Siempre ordena por ts antes de guardar para garantizar orden cronológico.
+    """
+    # Ordenar antes de persistir
+    snapshot = sorted(list(history), key=lambda x: x.get('ts', 0))
+
+    # 1) Guardado local inmediato (sin red → nunca bloquea)
     try:
         with open(HISTORY_LOCAL, 'w', encoding='utf-8') as f:
-            json.dump(snapshot, f, ensure_ascii=False)
+            json.dump(snapshot, f, ensure_ascii=False, indent=None)
+        print(f'[Elora] Historial local guardado: {len(snapshot)} mensajes.', flush=True)
     except Exception as e:
         print(f'[Elora] Error guardando historial local: {e}', flush=True)
 
-    # Guardado Supabase en segundo plano (no bloquea)
+    # 2) Supabase en hilo daemon (upsert = insert-or-update)
     def _subir():
         if not supabase:
             return
         try:
-            supabase.table('memoria_elora').update(
-                {'contenido': snapshot}
-            ).eq('tipo', 'historico').execute()
-            print('[Elora] Memoria actualizada en Supabase', flush=True)
+            supabase.table('memoria_elora').upsert(
+                {'tipo': 'historico', 'contenido': snapshot}
+            ).execute()
+            print(f'[Elora] Supabase actualizado: {len(snapshot)} mensajes.', flush=True)
         except Exception as e:
             print(f'[Elora] Error al guardar en Supabase: {e}', flush=True)
 
@@ -292,14 +371,22 @@ MAX_TURNOS_HISTORIAL = 30
 
 def build_messages(user_msg, persona_extra=None, file_bytes=None, file_mime=None):
     """Construye la lista de mensajes en formato OpenAI/OpenRouter.
-    'model' en historial → 'assistant' (formato OpenRouter)."""
+
+    - Normaliza cualquier formato de entrada (Gemini, OpenAI, interno).
+    - Ordena estrictamente por ts (ASC) antes de recortar.
+    - Mapea role 'model' → 'assistant' para compatibilidad OpenRouter.
+    """
     persona_text = persona_extra or construir_persona_dinamica()
     messages = [{'role': 'system', 'content': persona_text}]
 
-    historial = [
-        e for e in HISTORY
-        if e.get('role') in ('user', 'model') and e.get('text')
-    ]
+    # Normalizar cada entrada y filtrar las inválidas
+    historial_raw = [normalizar_entrada(e) for e in HISTORY]
+    historial = [e for e in historial_raw if e is not None and e.get('text')]
+
+    # Ordenar SIEMPRE por ts (más antiguo primero) antes de recortar
+    historial.sort(key=lambda x: x.get('ts', 0))
+
+    # Conservar solo los últimos MAX_TURNOS_HISTORIAL turnos
     if len(historial) > MAX_TURNOS_HISTORIAL:
         historial = historial[-MAX_TURNOS_HISTORIAL:]
 
