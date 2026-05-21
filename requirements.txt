@@ -1,4 +1,3 @@
-google-genai
-google-generativeai
+openai
 supabase
 Flask
