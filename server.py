@@ -22,7 +22,6 @@ MODELOS_OPENROUTER = [
     'meta-llama/llama-3-8b-instruct:free',
     'mistralai/mistral-7b-instruct:free',
     'google/gemma-7b-it:free',
-    'openchat/openchat-7b:free',
 ]
 
 
