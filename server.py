@@ -37,7 +37,7 @@ MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
 # Timeout para detectar modelos caídos/saturados rápidamente:
 # connect=4s → detecta 429/404 en <4s y salta al siguiente modelo
 # read=25s   → da tiempo al stream para entregar chunks sin cortar
-TIMEOUT_MODELO = httpx.Timeout(connect=4.0, read=25.0, write=10.0, pool=5.0)
+TIMEOUT_MODELO = httpx.Timeout(connect=25.0, read=25.0, write=10.0, pool=5.0)
 
 
 # ── Utilidades de tiempo / estado ──────────────────────────────────────────────
