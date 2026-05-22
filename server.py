@@ -40,6 +40,8 @@ MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
 TIMEOUT_MODELO = httpx.Timeout(connect=25.0, read=25.0, write=10.0, pool=5.0)
 
 
+
+
 # ── Utilidades de tiempo / estado ──────────────────────────────────────────────
 def hora_nicaragua():
     return datetime.now(NICARAGUA_TZ)
