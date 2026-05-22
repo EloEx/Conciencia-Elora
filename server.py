@@ -9,6 +9,7 @@ from flask import Flask, request, jsonify, send_from_directory, Response, stream
 from openai import OpenAI, APITimeoutError, RateLimitError, APIStatusError
 import backup
 import tools_runtime
+import memoria_rag
 from supabase import create_client
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
@@ -351,6 +352,9 @@ def save_history(history):
 
 HISTORY = load_history()
 
+# Indexar historial en Supabase FTS (background, solo si tabla existe)
+memoria_rag.migrar_historial_supa(supabase, HISTORY)
+
 MONOLOGO_FILE = 'monologo_interno.json'
 monologo_lock = threading.Lock()
 
@@ -423,34 +427,48 @@ def construir_persona_dinamica():
     return PERSONA + contexto + resumen_monologos_recientes(5)
 
 
-MAX_TURNOS_HISTORIAL = 30
+MAX_TURNOS_HISTORIAL = 30   # fallback (sin RAG): máximo de turnos en bloque
 
 
 def build_messages(user_msg, persona_extra=None, file_bytes=None, file_mime=None):
     """Construye la lista de mensajes en formato OpenAI/OpenRouter.
 
-    - Normaliza cualquier formato de entrada (Gemini, OpenAI, interno).
-    - Ordena estrictamente por ts (ASC) antes de recortar.
-    - Mapea role 'model' → 'assistant' para compatibilidad OpenRouter.
+    Con RAG activo (siempre):
+      - BM25 en memoria recupera hasta 6 recuerdos semánticamente relevantes.
+      - Se añaden siempre los 4 turnos más recientes (coherencia inmediata).
+      - Total máximo: ~10 mensajes en contexto (vs 30+ del volcado masivo).
+
+    Fallback (si HISTORY está vacío o la query es nula):
+      - Comportamiento idéntico al anterior: últimos MAX_TURNOS_HISTORIAL.
+
+    Mapea role 'model' → 'assistant' para compatibilidad OpenRouter.
     """
     persona_text = persona_extra or construir_persona_dinamica()
     messages = [{'role': 'system', 'content': persona_text}]
 
-    # Normalizar cada entrada y filtrar las inválidas
-    historial_raw = [normalizar_entrada(e) for e in HISTORY]
-    historial = [e for e in historial_raw if e is not None and e.get('text')]
+    # ── RAG: recuperar contexto relevante (BM25 + recientes) ──────────────────
+    with history_lock:
+        historia_actual = list(HISTORY)
 
-    # Ordenar SIEMPRE por ts (más antiguo primero) antes de recortar
-    historial.sort(key=lambda x: x.get('ts', 0))
+    contexto = memoria_rag.recuperar_hibrido(
+        supabase,
+        historia_actual,
+        query=user_msg or '',
+    )
 
-    # Conservar solo los últimos MAX_TURNOS_HISTORIAL turnos
-    if len(historial) > MAX_TURNOS_HISTORIAL:
-        historial = historial[-MAX_TURNOS_HISTORIAL:]
+    # Si RAG devuelve vacío (historial en blanco / primer uso), usar fallback
+    if not contexto and historia_actual:
+        normalizados = [normalizar_entrada(e) for e in historia_actual]
+        normalizados = [e for e in normalizados if e and e.get('text')]
+        normalizados.sort(key=lambda x: x.get('ts', 0))
+        contexto = normalizados[-MAX_TURNOS_HISTORIAL:]
 
-    for entry in historial:
-        # 'model' → 'assistant' para compatibilidad OpenRouter
-        role = 'assistant' if entry['role'] == 'model' else 'user'
-        messages.append({'role': role, 'content': entry['text']})
+    for entry in contexto:
+        role_raw = entry.get('role', 'user')
+        role = 'assistant' if role_raw in ('model', 'assistant') else 'user'
+        text = entry.get('text', '')
+        if text:
+            messages.append({'role': role, 'content': text})
 
     if file_bytes and file_mime:
         tipo = 'imagen' if file_mime.startswith('image/') else 'audio'
@@ -460,6 +478,12 @@ def build_messages(user_msg, persona_extra=None, file_bytes=None, file_mime=None
         contenido = user_msg or ''
 
     messages.append({'role': 'user', 'content': contenido})
+
+    print(
+        f'[RAG] Contexto inyectado: {len(contexto)} msgs '
+        f'(de {len(historia_actual)} en historial).',
+        flush=True,
+    )
     return messages
 
 
@@ -951,18 +975,24 @@ def chat():
 
             # ── Guardar en historial ──────────────────────────────────────────
             texto_guardado = reply_text + pie
+            ts_user = time.time()
+            ts_model = ts_user + 0.001   # orden estricto user < model
             with history_lock:
                 HISTORY.append({
                     'role': 'user',
                     'text': user_msg_para_historial,
-                    'ts': time.time(),
+                    'ts': ts_user,
                 })
                 HISTORY.append({
                     'role': 'model',
                     'text': texto_guardado,
-                    'ts': time.time(),
+                    'ts': ts_model,
                 })
                 save_history(HISTORY)
+
+            # ── Indexar en Supabase FTS (background, no bloquea el stream) ──
+            memoria_rag.indexar_mensaje_supa(supabase, 'user', user_msg_para_historial, ts_user)
+            memoria_rag.indexar_mensaje_supa(supabase, 'model', texto_guardado, ts_model)
 
         return Response(stream_with_context(generate()), mimetype='text/plain')
 
