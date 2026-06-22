@@ -30,9 +30,9 @@ from typing import List, Dict, Optional
 
 
 # ── Constantes ─────────────────────────────────────────────────────────────────
-K_RAG = 6            # recuerdos relevantes recuperados por BM25
-K_RECIENTES = 4      # turnos recientes siempre incluidos (contexto inmediato)
-K_SUPA_FTS = 5       # resultados Supabase FTS
+K_RAG = 10           # recuerdos relevantes recuperados por BM25
+K_RECIENTES = 6      # turnos recientes siempre incluidos (contexto inmediato)
+K_SUPA_FTS = 8       # resultados Supabase FTS
 DECAY_HALF_DAYS = 7  # recuerdos pierden la mitad de peso cada 7 días
 
 # Stopwords en español + muletillas de chat afectivo (no aportan semántica)
@@ -46,6 +46,25 @@ STOPWORDS = {
     'amor', 'vida', 'mi', 'cielo', 'bebé', 'corazón', 'alma', 'linda',
     'lindo', 'bonita', 'bonito', 'querido', 'querida', 'cariño', 'amor',
 }
+
+
+# ── Detección de referencias temporales ────────────────────────────────────────
+_TEMPORAL = [
+    (re.compile(r'\bayer\b|\banoche\b', re.I), 1),
+    (re.compile(r'\bantes\s+de\s+ayer\b|\bantier\b', re.I), 2),
+    (re.compile(r'\bhace\s*dos\s*d[ií]as\b|\bhace\s*2\s*d[ií]as\b', re.I), 2),
+    (re.compile(r'\bhace\s*tres\s*d[ií]as\b|\bhace\s*3\s*d[ií]as\b', re.I), 3),
+    (re.compile(r'\bsemana\s+pasada\b|\bhace\s+una\s+semana\b|\bhace\s*7\s*d[ií]as\b', re.I), 7),
+    (re.compile(r'\bhace\s*dos\s+semanas\b|\bhace\s*2\s+semanas\b', re.I), 14),
+]
+
+
+def _detectar_ventana_temporal(query: str) -> Optional[int]:
+    """Retorna días_atrás si la query menciona tiempo pasado, o None."""
+    for pattern, days in _TEMPORAL:
+        if pattern.search(query):
+            return days
+    return None
 
 
 # ── Tokenización ───────────────────────────────────────────────────────────────
@@ -245,7 +264,7 @@ def migrar_historial_supa(supabase, history: List[Dict]) -> None:
     threading.Thread(target=_migrar, daemon=True).start()
 
 
-# ── Capa híbrida: BM25 + Supabase FTS fusionados ──────────────────────────────
+# ── Capa híbrida: BM25 + Supabase FTS + ventana temporal ──────────────────────
 def recuperar_hibrido(
     supabase,
     history: List[Dict],
@@ -255,25 +274,22 @@ def recuperar_hibrido(
     turnos_recientes: int = K_RECIENTES,
 ) -> List[Dict]:
     """
-    Fusiona resultados de BM25 en memoria (Capa 1) + Supabase FTS (Capa 2).
+    Fusiona tres capas de recuperación:
+      Capa 1 — BM25 en memoria (siempre activa).
+      Capa 2 — Supabase FTS (si disponible).
+      Capa 3 — Ventana temporal: detecta "ayer", "semana pasada", etc.
+               e incluye mensajes del período mencionado directamente.
 
-    Si Supabase FTS no responde, devuelve solo BM25.
     Los resultados se deduplan por texto[:80] y se ordenan por ts ASC.
     """
     # Capa 1 siempre
     bm25_results = recuperar_contexto(history, query, k=k_bm25, turnos_recientes=turnos_recientes)
-
-    # Capa 2 si disponible
-    fts_results = buscar_supa_fts(supabase, query, k=k_fts)
-
-    if not fts_results:
-        return bm25_results
-
-    # Fusionar: Supabase puede traer msgs que ya no están en HISTORY (RAM)
     seen = {e['text'][:80] for e in bm25_results}
+
+    # Capa 2 — Supabase FTS
+    fts_results = buscar_supa_fts(supabase, query, k=k_fts)
     extra = []
     for m in fts_results:
-        # normalizar formato Supabase → formato interno
         role_raw = m.get('role', 'user')
         role = 'model' if role_raw in ('model', 'assistant') else 'user'
         text = m.get('text', '')
@@ -282,6 +298,26 @@ def recuperar_hibrido(
             seen.add(text[:80])
             extra.append({'role': role, 'text': text, 'ts': ts})
 
-    combined = bm25_results + extra
+    # Capa 3 — Ventana temporal
+    temporales = []
+    dias = _detectar_ventana_temporal(query)
+    if dias is not None and history:
+        ahora = time.time()
+        # ventana: desde (días+0.5) atrás hasta (días-0.5) atrás
+        win_fin   = ahora - (dias - 0.5) * 86400
+        win_inicio = ahora - (dias + 0.5) * 86400
+        for e in history:
+            ts_e = e.get('ts', 0)
+            if win_inicio <= ts_e <= win_fin and e.get('text'):
+                if e['text'][:80] not in seen:
+                    seen.add(e['text'][:80])
+                    temporales.append(e)
+        if temporales:
+            print(
+                f'[RAG][temporal] "{dias}d atrás": {len(temporales)} msgs añadidos.',
+                flush=True,
+            )
+
+    combined = bm25_results + extra + temporales
     combined.sort(key=lambda x: x.get('ts', 0))
     return combined
