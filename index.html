@@ -214,6 +214,11 @@
                     replySpan.textContent += decoder.decode(value, { stream: true });
                     chat.scrollTop = chat.scrollHeight;
                 }
+                const animoMatch = replySpan.textContent.match(/\n__ANIMO__:(\w+)/);
+                if (animoMatch) {
+                    aplicarAnimo(animoMatch[1]);
+                    replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
+                }
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
@@ -289,6 +294,11 @@
                     if (done) break;
                     replySpan.textContent += decoder.decode(value, {stream: true});
                     chat.scrollTop = chat.scrollHeight;
+                }
+                const animoMatch = replySpan.textContent.match(/\n__ANIMO__:(\w+)/);
+                if (animoMatch) {
+                    aplicarAnimo(animoMatch[1]);
+                    replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
