@@ -1081,6 +1081,9 @@ def chat():
             memoria_rag.indexar_mensaje_supa(supabase, 'user', user_msg_para_historial, ts_user)
             memoria_rag.indexar_mensaje_supa(supabase, 'model', texto_guardado, ts_model)
 
+            # ── Emitir ánimo al frontend (token oculto al final del stream) ──
+            yield f'\n__ANIMO__:{calcular_estado_animo(hora_nicaragua(), HISTORY)}'
+
         return Response(stream_with_context(generate()), mimetype='text/plain')
 
     except Exception as e:
