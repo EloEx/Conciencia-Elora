@@ -27,12 +27,11 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 
 MODELOS_OPENROUTER = [
-    "cognitivecomputations/dolphin-mistral-24b-venice-v3",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "cohere/north-mini-code:free",
-    "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
-    "nvidia/nemotron-3.5-content-safety:free",
-    "liquid/lfm-2.5-1.2b-instruct:free"
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'deepseek/deepseek-v4-flash:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
+    'qwen/qwen3-coder:free',
+    'nvidia/nemotron-nano-9b-v2:free',
 ]
 
 MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
@@ -687,19 +686,37 @@ def crear_cliente():
     )
 
 
+# Caché de estado de modelos: {model_name: {'status': ..., 'latency_ms': ..., 'ts': float}}
+MODEL_CACHE: dict = {}
+MODEL_CACHE_TTL = 300   # segundos (5 minutos)
+_cache_lock = threading.Lock()
+
+
 def get_model_status() -> list:
-    """Ping concurrente a cada modelo de MODELOS_OPENROUTER.
+    """Ping concurrente a cada modelo de MODELOS_OPENROUTER con caché de 5 min.
+
+    Flujo por modelo:
+      1. Consulta MODEL_CACHE. Si existe y tiene < 300s de antigüedad → devuelve
+         el valor guardado sin llamar a la API.
+      2. Si no existe o expiró → hace el ping real, guarda resultado + timestamp.
 
     Usa max_tokens=1 y timeout=5s para minimizar consumo de créditos.
-    Retorna lista de dicts: {model, status, latency_ms, error}.
+    Retorna lista de dicts: {model, status, latency_ms, error?, cached?}.
     """
-    import time as _time
-
+    now = time.time()
     results = [None] * len(MODELOS_OPENROUTER)
 
     def _ping(idx: int, model: str):
+        # ── Revisar caché ──────────────────────────────────────────────────────
+        with _cache_lock:
+            entrada = MODEL_CACHE.get(model)
+        if entrada and (now - entrada['ts']) < MODEL_CACHE_TTL:
+            results[idx] = {**entrada, 'cached': True}
+            return
+
+        # ── Ping real a la API ─────────────────────────────────────────────────
         client = crear_cliente()
-        t0 = _time.monotonic()
+        t0 = time.monotonic()
         try:
             client.chat.completions.create(
                 model=model,
@@ -708,16 +725,22 @@ def get_model_status() -> list:
                 stream=False,
                 timeout=httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0),
             )
-            latency = int((_time.monotonic() - t0) * 1000)
-            results[idx] = {'model': model, 'status': 'ok', 'latency_ms': latency}
+            latency = int((time.monotonic() - t0) * 1000)
+            dato = {'model': model, 'status': 'ok', 'latency_ms': latency, 'ts': time.time()}
         except Exception as e:
-            latency = int((_time.monotonic() - t0) * 1000)
-            results[idx] = {
+            latency = int((time.monotonic() - t0) * 1000)
+            dato = {
                 'model': model,
                 'status': 'error',
                 'latency_ms': latency,
                 'error': str(e)[:120],
+                'ts': time.time(),
             }
+
+        # ── Guardar en caché y devolver ────────────────────────────────────────
+        with _cache_lock:
+            MODEL_CACHE[model] = dato
+        results[idx] = {**dato, 'cached': False}
 
     hilos = [
         threading.Thread(target=_ping, args=(i, m), daemon=True)
