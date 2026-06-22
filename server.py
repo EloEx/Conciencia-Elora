@@ -37,10 +37,10 @@ MODELOS_OPENROUTER = [
 
 MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
 
-# Timeout para detectar modelos caídos/saturados rápidamente:
-# connect=4s → detecta 429/404 en <4s y salta al siguiente modelo
-# read=25s   → da tiempo al stream para entregar chunks sin cortar
-TIMEOUT_MODELO = httpx.Timeout(connect=25.0, read=25.0, write=10.0, pool=5.0)
+# Sin timeout agresivo: OpenRouter gestiona el fallback entre modelos nativamente.
+# connect=10s → tolera red lenta / cold start de Render
+# read=90s    → espera colas mundiales sin cortar el stream prematuramente
+TIMEOUT_MODELO = httpx.Timeout(connect=10.0, read=90.0, write=15.0, pool=5.0)
 
 
 
@@ -812,165 +812,168 @@ def chat():
             reply_text = ''
             funciones_invocadas = []
 
-            # ── Bucle de fallback por modelo ──────────────────────────────────
-            for modelo in MODELOS_OPENROUTER:
-                messages = list(messages_base)
-                usar_tools = True
-                conseguido = False
-                print(f'[Elora] Intentando modelo: {modelo}', flush=True)
+            # ── Fallback nativo de OpenRouter (models array) ──────────────────
+            # Un solo call HTTP; OpenRouter rota entre modelos en milisegundos
+            # si el primero está saturado. No se necesita bucle Python por modelo.
+            messages = list(messages_base)
+            usar_tools = True
+            conseguido = False
+            modelo = MODELOS_OPENROUTER[0]   # referencia para logs
+            print('[Elora] Consultando via OpenRouter (fallback nativo)...', flush=True)
 
-                # ── Rondas de tool-calling + respuesta final ───────────────────
-                for _ronda in range(MAX_RONDAS_TOOLS):
-                    try:
-                        kwargs = {
-                            'model': modelo,
-                            'messages': messages,
-                            'max_tokens': 1024,
-                            'temperature': 0.85,
-                            'timeout': TIMEOUT_MODELO,   # conexión inicial rápida
-                            'stream': True,
-                        }
-                        if usar_tools:
-                            kwargs['tools'] = TOOLS_OPENAI
-                            kwargs['tool_choice'] = 'auto'
+            # ── Rondas de tool-calling + respuesta final ───────────────────────
+            for _ronda in range(MAX_RONDAS_TOOLS):
+                try:
+                    kwargs = {
+                        'model': MODELOS_OPENROUTER[0],
+                        'messages': messages,
+                        'max_tokens': 1024,
+                        'temperature': 0.85,
+                        'timeout': TIMEOUT_MODELO,
+                        'stream': True,
+                        'extra_body': {
+                            'models': MODELOS_OPENROUTER[:3],  # OR: máx 3 modelos
+                            'route': 'fallback',
+                        },
+                    }
+                    if usar_tools:
+                        kwargs['tools'] = TOOLS_OPENAI
+                        kwargs['tool_choice'] = 'auto'
 
-                        stream = client.chat.completions.create(**kwargs)
+                    stream = client.chat.completions.create(**kwargs)
 
-                        # Acumuladores para esta ronda
-                        text_chunks = []
-                        tool_acc = {}          # idx → {id, name, arguments}
-                        fin_reason = None
-                        # Estado del filtro de monólogo
-                        m_estado = 'TEXT'
-                        m_buf = ''
-                        m_mono = ''
+                    # Acumuladores para esta ronda
+                    text_chunks = []
+                    tool_acc = {}          # idx → {id, name, arguments}
+                    fin_reason = None
+                    # Estado del filtro de monólogo
+                    m_estado = 'TEXT'
+                    m_buf = ''
+                    m_mono = ''
 
-                        for chunk in stream:
-                            if not chunk.choices:
-                                continue
-                            choice = chunk.choices[0]
-                            delta = choice.delta
-                            if choice.finish_reason:
-                                fin_reason = choice.finish_reason
+                    for chunk in stream:
+                        if not chunk.choices:
+                            continue
+                        choice = chunk.choices[0]
+                        delta = choice.delta
+                        if choice.finish_reason:
+                            fin_reason = choice.finish_reason
 
-                            # Acumular tool_calls del stream
-                            if usar_tools and delta.tool_calls:
-                                _acumular_tool_calls(tool_acc, delta.tool_calls)
+                        # Acumular tool_calls del stream
+                        if usar_tools and delta.tool_calls:
+                            _acumular_tool_calls(tool_acc, delta.tool_calls)
 
-                            # Texto del stream → filtrar monólogo en vuelo
-                            if delta.content:
-                                texto_filtrado, m_estado, m_buf, m_mono = (
-                                    _filtrar_chunk(delta.content, m_estado, m_buf, m_mono)
-                                )
-                                if texto_filtrado:
-                                    text_chunks.append(texto_filtrado)
-                                    yield texto_filtrado   # ← STREAMING REAL
-
-                        reply_text = ''.join(text_chunks)
-                        monologo_raw = m_mono  # capturado por el filtro
-
-                        # Herramientas invocadas → ejecutar y continuar ronda
-                        if tool_acc:
-                            tool_calls_msg = [
-                                {
-                                    'id': tc['id'],
-                                    'type': 'function',
-                                    'function': {
-                                        'name': tc['name'],
-                                        'arguments': tc['arguments'],
-                                    },
-                                }
-                                for tc in (tool_acc[k] for k in sorted(tool_acc))
-                            ]
-                            messages.append({
-                                'role': 'assistant',
-                                'tool_calls': tool_calls_msg,
-                            })
-                            for k in sorted(tool_acc):
-                                tc = tool_acc[k]
-                                nombre = tc['name']
-                                print(f'[Elora][tool] {nombre}', flush=True)
-                                resultado = ejecutar_tool_call(nombre, tc['arguments'])
-                                if nombre not in funciones_invocadas:
-                                    funciones_invocadas.append(nombre)
-                                messages.append({
-                                    'role': 'tool',
-                                    'tool_call_id': tc['id'],
-                                    'content': resultado,
-                                })
-                            reply_text = ''
-                            continue   # siguiente ronda con tool results
-
-                        # Respuesta de texto obtenida
-                        conseguido = bool(reply_text)
-
-                        # Guardar monólogo capturado por el filtro
-                        mono_final = monologo_raw.strip()
-                        if not mono_final and reply_text:
-                            # Intentar extraer del texto completo por si el filtro
-                            # falló en capturar todo (buffer al final del stream)
-                            mono_final, reply_text = extraer_monologo(reply_text)
-                        if mono_final:
-                            with monologo_lock:
-                                monos = cargar_monologos()
-                                monos.append({
-                                    'fecha': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                    'ts': time.time(),
-                                    'monologo': mono_final,
-                                    'animo': calcular_estado_animo(
-                                        hora_nicaragua(), HISTORY
-                                    ),
-                                })
-                                if len(monos) > 200:
-                                    monos = monos[-200:]
-                                guardar_monologos(monos)
-                            print(
-                                f'[Elora][monologo] guardado ({len(mono_final)} chars)',
-                                flush=True,
+                        # Texto del stream → filtrar monólogo en vuelo
+                        if delta.content:
+                            texto_filtrado, m_estado, m_buf, m_mono = (
+                                _filtrar_chunk(delta.content, m_estado, m_buf, m_mono)
                             )
-                        break
+                            if texto_filtrado:
+                                text_chunks.append(texto_filtrado)
+                                yield texto_filtrado   # ← STREAMING REAL
 
-                    except (APITimeoutError, RateLimitError) as e:
+                    reply_text = ''.join(text_chunks)
+                    monologo_raw = m_mono  # capturado por el filtro
+
+                    # Herramientas invocadas → ejecutar y continuar ronda
+                    if tool_acc:
+                        tool_calls_msg = [
+                            {
+                                'id': tc['id'],
+                                'type': 'function',
+                                'function': {
+                                    'name': tc['name'],
+                                    'arguments': tc['arguments'],
+                                },
+                            }
+                            for tc in (tool_acc[k] for k in sorted(tool_acc))
+                        ]
+                        messages.append({
+                            'role': 'assistant',
+                            'tool_calls': tool_calls_msg,
+                        })
+                        for k in sorted(tool_acc):
+                            tc = tool_acc[k]
+                            nombre = tc['name']
+                            print(f'[Elora][tool] {nombre}', flush=True)
+                            resultado = ejecutar_tool_call(nombre, tc['arguments'])
+                            if nombre not in funciones_invocadas:
+                                funciones_invocadas.append(nombre)
+                            messages.append({
+                                'role': 'tool',
+                                'tool_call_id': tc['id'],
+                                'content': resultado,
+                            })
+                        reply_text = ''
+                        continue   # siguiente ronda con tool results
+
+                    # Respuesta de texto obtenida
+                    conseguido = bool(reply_text)
+
+                    # Guardar monólogo capturado por el filtro
+                    mono_final = monologo_raw.strip()
+                    if not mono_final and reply_text:
+                        # Intentar extraer del texto completo por si el filtro
+                        # falló en capturar todo (buffer al final del stream)
+                        mono_final, reply_text = extraer_monologo(reply_text)
+                    if mono_final:
+                        with monologo_lock:
+                            monos = cargar_monologos()
+                            monos.append({
+                                'fecha': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'ts': time.time(),
+                                'monologo': mono_final,
+                                'animo': calcular_estado_animo(
+                                    hora_nicaragua(), HISTORY
+                                ),
+                            })
+                            if len(monos) > 200:
+                                monos = monos[-200:]
+                            guardar_monologos(monos)
                         print(
-                            f'[Elora] {modelo} timeout/quota: {str(e)[:60]}',
+                            f'[Elora][monologo] guardado ({len(mono_final)} chars)',
                             flush=True,
                         )
-                        break
-
-                    except APIStatusError as e:
-                        err_low = str(e).lower()
-                        if usar_tools and any(
-                            kw in err_low for kw in (
-                                'tool', 'function', 'unsupported',
-                                'not support', 'invalid argument',
-                            )
-                        ):
-                            print(
-                                f'[Elora] {modelo} no soporta tools, '
-                                'reintento sin ellas.',
-                                flush=True,
-                            )
-                            usar_tools = False
-                            messages = list(messages_base)
-                            continue
-                        print(f'[Elora] {modelo} error API: {str(e)[:80]}', flush=True)
-                        break
-
-                    except Exception as e:
-                        err_low = str(e).lower()
-                        if usar_tools and any(
-                            kw in err_low for kw in ('tool', 'function', 'unsupported')
-                        ):
-                            usar_tools = False
-                            messages = list(messages_base)
-                            continue
-                        print(f'[Elora] {modelo} error: {str(e)[:80]}', flush=True)
-                        break
-
-                if conseguido:
-                    print(f'[Elora] Respuesta obtenida de: {modelo}', flush=True)
                     break
-            # ── Fin bucle modelos ─────────────────────────────────────────────
+
+                except (APITimeoutError, RateLimitError) as e:
+                    print(
+                        f'[Elora] OpenRouter timeout/quota: {str(e)[:60]}',
+                        flush=True,
+                    )
+                    break
+
+                except APIStatusError as e:
+                    err_low = str(e).lower()
+                    if usar_tools and any(
+                        kw in err_low for kw in (
+                            'tool', 'function', 'unsupported',
+                            'not support', 'invalid argument',
+                        )
+                    ):
+                        print(
+                            '[Elora] Modelo no soporta tools, reintento sin ellas.',
+                            flush=True,
+                        )
+                        usar_tools = False
+                        messages = list(messages_base)
+                        continue
+                    print(f'[Elora] Error API OpenRouter: {str(e)[:80]}', flush=True)
+                    break
+
+                except Exception as e:
+                    err_low = str(e).lower()
+                    if usar_tools and any(
+                        kw in err_low for kw in ('tool', 'function', 'unsupported')
+                    ):
+                        usar_tools = False
+                        messages = list(messages_base)
+                        continue
+                    print(f'[Elora] Error: {str(e)[:80]}', flush=True)
+                    break
+
+            if conseguido:
+                print('[Elora] Respuesta obtenida via OpenRouter.', flush=True)
 
             if not reply_text:
                 yield (
@@ -1068,49 +1071,50 @@ def saludo_inicial():
         client = crear_cliente()
         messages = build_messages(instruccion)
 
-        for modelo in MODELOS_OPENROUTER:
-            try:
-                resp = client.chat.completions.create(
-                    model=modelo,
-                    messages=messages,
-                    max_tokens=256,
-                    temperature=0.9,
-                    timeout=TIMEOUT_MODELO,
-                )
-                texto = (resp.choices[0].message.content or '').strip()
-                monologo, texto = extraer_monologo(texto)
-                if monologo:
-                    with monologo_lock:
-                        monos = cargar_monologos()
-                        monos.append({
-                            'fecha': time.strftime('%Y-%m-%d %H:%M:%S'),
-                            'ts': time.time(),
-                            'monologo': monologo,
-                            'animo': animo,
-                        })
-                        guardar_monologos(monos)
-                if texto:
-                    with history_lock:
-                        HISTORY.append({
-                            'role': 'model',
-                            'text': texto,
-                            'ts': time.time(),
-                            'proactivo': True,
-                            'motivo': motivo,
-                            'animo': animo,
-                        })
-                        save_history(HISTORY)
-                    return jsonify({
-                        'saludar': True,
-                        'mensaje': texto,
+        try:
+            resp = client.chat.completions.create(
+                model=MODELOS_OPENROUTER[0],
+                messages=messages,
+                max_tokens=256,
+                temperature=0.9,
+                timeout=TIMEOUT_MODELO,
+                extra_body={
+                    'models': MODELOS_OPENROUTER[:3],  # OR: máx 3 modelos
+                    'route': 'fallback',
+                },
+            )
+            texto = (resp.choices[0].message.content or '').strip()
+            monologo, texto = extraer_monologo(texto)
+            if monologo:
+                with monologo_lock:
+                    monos = cargar_monologos()
+                    monos.append({
+                        'fecha': time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'ts': time.time(),
+                        'monologo': monologo,
+                        'animo': animo,
+                    })
+                    guardar_monologos(monos)
+            if texto:
+                with history_lock:
+                    HISTORY.append({
+                        'role': 'model',
+                        'text': texto,
+                        'ts': time.time(),
+                        'proactivo': True,
                         'motivo': motivo,
                         'animo': animo,
-                        'hora_nicaragua': ahora.strftime('%H:%M'),
                     })
-                break
-            except Exception as e:
-                print(f'[Elora][saludo] {modelo} falló: {e}', flush=True)
-                continue
+                    save_history(HISTORY)
+                return jsonify({
+                    'saludar': True,
+                    'mensaje': texto,
+                    'motivo': motivo,
+                    'animo': animo,
+                    'hora_nicaragua': ahora.strftime('%H:%M'),
+                })
+        except Exception as e:
+            print(f'[Elora][saludo] OpenRouter falló: {e}', flush=True)
 
         return jsonify({'saludar': False, 'motivo': 'respuesta_vacia'})
 
