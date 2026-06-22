@@ -466,10 +466,18 @@ def build_messages(user_msg, persona_extra=None, file_bytes=None, file_mime=None
     with history_lock:
         historia_actual = list(HISTORY)
 
+    # Query enriquecida: últimos 2 msgs del usuario + mensaje actual
+    # → mejora recuperación cuando se pregunta por conversaciones pasadas
+    msgs_usuario_recientes = [
+        e['text'] for e in historia_actual[-8:]
+        if e.get('role') == 'user' and e.get('text')
+    ][-2:]
+    query_enriquecida = ' '.join(msgs_usuario_recientes + [user_msg or '']).strip()
+
     contexto = memoria_rag.recuperar_hibrido(
         supabase,
         historia_actual,
-        query=user_msg or '',
+        query=query_enriquecida,
     )
 
     # Si RAG devuelve vacío (historial en blanco / primer uso), usar fallback

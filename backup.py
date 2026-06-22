@@ -118,6 +118,33 @@ def last_backup():
     return _last_backup_ts
 
 
+def _leer_ultimo_respaldo_github():
+    """Lee la fecha del último commit en la rama 'memoria' desde la API de GitHub.
+    Se ejecuta en hilo daemon al arrancar para poblar _last_backup_ts."""
+    global _last_backup_ts
+    token = _token()
+    if not token:
+        return
+    try:
+        import json as _json
+        url = (
+            f'https://api.github.com/repos/{REPO}/commits'
+            f'?sha={BRANCH}&per_page=1'
+        )
+        req = urllib.request.Request(url, headers={
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+        if data:
+            raw = data[0]['commit']['committer']['date']   # "2026-05-21T00:00:00Z"
+            _last_backup_ts = raw.replace('T', ' ').replace('Z', '')
+            print(f'[Elora][backup] Último respaldo en GitHub: {_last_backup_ts}', flush=True)
+    except Exception:
+        pass   # sin GITHUB_TOKEN o rama nueva → queda None, no es error
+
+
 def _periodic_loop():
     while True:
         time.sleep(24 * 60 * 60)
@@ -139,4 +166,6 @@ def start():
     except Exception:
         pass
     threading.Thread(target=_periodic_loop, daemon=True).start()
+    # Leer fecha del último respaldo en GitHub (hilo daemon, no bloquea el arranque)
+    threading.Thread(target=_leer_ultimo_respaldo_github, daemon=True).start()
     print('[Elora][backup] Sistema de respaldo activo (cada 24h + al apagar).', flush=True)
