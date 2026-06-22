@@ -70,6 +70,9 @@
             try {
                 const r = await fetch('/saludo_inicial');
                 const data = await r.json();
+                if (data.animo) {
+                    aplicarAnimo(data.animo);
+                }
                 if (data.saludar && data.mensaje) {
                     const chat = document.getElementById('chat');
                     const welcome = document.getElementById('welcome');
@@ -78,6 +81,33 @@
                     chat.scrollTop = chat.scrollHeight;
                 }
             } catch (e) { /* silencio */ }
+        }
+
+        function aplicarAnimo(animo) {
+            let colorFondo = "#ffffff";
+            switch (animo) {
+                case 'radiante':
+                    colorFondo = "#FFF9C4";
+                    break;
+                case 'triste':
+                    colorFondo = "#424242";
+                    break;
+                case 'romantica':
+                case 'enamorada':
+                    colorFondo = "#F8BBD0";
+                    break;
+                case 'pasional':
+                case 'picara':
+                    colorFondo = "#D32F2F";
+                    break;
+                case 'sexy':
+                case 'sensual':
+                case 'excitada':
+                    colorFondo = "#4A148C";
+                    break;
+            }
+            document.body.style.backgroundColor = colorFondo;
+            console.log("El cuerpo de Elora reacciona al ánimo: " + animo);
         }
 
         (async () => {
