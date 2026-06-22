@@ -687,6 +687,50 @@ def crear_cliente():
     )
 
 
+def get_model_status() -> list:
+    """Ping concurrente a cada modelo de MODELOS_OPENROUTER.
+
+    Usa max_tokens=1 y timeout=5s para minimizar consumo de créditos.
+    Retorna lista de dicts: {model, status, latency_ms, error}.
+    """
+    import time as _time
+
+    results = [None] * len(MODELOS_OPENROUTER)
+
+    def _ping(idx: int, model: str):
+        client = crear_cliente()
+        t0 = _time.monotonic()
+        try:
+            client.chat.completions.create(
+                model=model,
+                messages=[{'role': 'user', 'content': 'hi'}],
+                max_tokens=1,
+                stream=False,
+                timeout=httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0),
+            )
+            latency = int((_time.monotonic() - t0) * 1000)
+            results[idx] = {'model': model, 'status': 'ok', 'latency_ms': latency}
+        except Exception as e:
+            latency = int((_time.monotonic() - t0) * 1000)
+            results[idx] = {
+                'model': model,
+                'status': 'error',
+                'latency_ms': latency,
+                'error': str(e)[:120],
+            }
+
+    hilos = [
+        threading.Thread(target=_ping, args=(i, m), daemon=True)
+        for i, m in enumerate(MODELOS_OPENROUTER)
+    ]
+    for h in hilos:
+        h.start()
+    for h in hilos:
+        h.join(timeout=7)   # espera máx 7s por hilo
+
+    return [r for r in results if r is not None]
+
+
 @app.route('/')
 def home():
     return send_from_directory('.', 'index.html')
@@ -1131,6 +1175,19 @@ def respaldar_ahora():
 @app.route('/estado_respaldo', methods=['GET'])
 def estado_respaldo():
     return jsonify({'ultimo_respaldo': backup.last_backup()})
+
+
+@app.route('/modelos_status', methods=['GET'])
+def modelos_status():
+    """Retorna el estado en tiempo real de cada modelo de MODELOS_OPENROUTER.
+
+    Ejemplo de respuesta:
+      [{"model": "meta-llama/llama-3.3-70b-instruct:free", "status": "ok", "latency_ms": 1240},
+       {"model": "deepseek/deepseek-v4-flash:free", "status": "error", "latency_ms": 5001,
+        "error": "Connection timeout"}]
+    """
+    resultados = get_model_status()
+    return jsonify(resultados)
 
 
 if __name__ == '__main__':
