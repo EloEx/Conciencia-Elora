@@ -59,7 +59,11 @@ def cargar_memoria_supabase(tipo_dato):
             .execute()
         )
         if response.data:
-            return response.data[0]['contenido']
+            row = response.data[0]
+            if isinstance(row, dict):
+                contenido = row.get('contenido', [])
+                if isinstance(contenido, list):
+                    return contenido
         return []
     except Exception as e:
         print(f'[Elora] Error al cargar {tipo_dato} desde Supabase: {e}', flush=True)
