@@ -28,18 +28,18 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 MODELOS_OPENROUTER = [
     "liquid/lfm-2.5-1.2b-instruct:free",
-    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+    "cohere/north-mini-code:free",
     "google/gemma-4-26b-a4b-it:free",
     "openrouter/free",
 ]
 
 def _fallback_models() -> list:
     """Devuelve hasta 3 modelos para el array OR `route:fallback`.
-    Prioriza `cognitivecomputations/dolphin-mistral-24b-venice-edition:free` (meta-modelo siempre disponible) colocándolo
+    Prioriza `openrouter/free` (meta-modelo siempre disponible) colocándolo
     primero si está en la lista; el resto en orden original. Máx 3 (límite OR).
     """
-    meta = [m for m in MODELOS_OPENROUTER if m == 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free']
-    otros = [m for m in MODELOS_OPENROUTER if m != 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free']
+    meta = [m for m in MODELOS_OPENROUTER if m == 'openrouter/free']
+    otros = [m for m in MODELOS_OPENROUTER if m != 'openrouter/free']
     return (meta + otros)[:3]
 
 
