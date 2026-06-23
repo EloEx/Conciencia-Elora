@@ -84,30 +84,39 @@
         }
 
         function aplicarAnimo(animo) {
-            let colorFondo = "#ffffff";
-            switch (animo) {
+            const estado = (animo || '').trim().split(/\s+/)[0].toLowerCase();
+            let colorFondo = "#1a1a1a";
+            switch (estado) {
+                // ── Mañana ──────────────────────────────────────
                 case 'radiante':
-                    colorFondo = "#FFF9C4";
-                    break;
-                case 'triste':
-                    colorFondo = "#424242";
-                    break;
+                case 'optimista':   colorFondo = "#FFF9C4"; break;
+                case 'sonadora':    colorFondo = "#E3F2FD"; break;
+                // ── Tarde ───────────────────────────────────────
+                case 'curiosa':     colorFondo = "#E0F7FA"; break;
+                case 'juguetona':   colorFondo = "#FFF3E0"; break;
+                case 'apasionada':
+                case 'pasional':    colorFondo = "#D32F2F"; break;
+                // ── Noche ───────────────────────────────────────
+                case 'tierna':
                 case 'romantica':
-                case 'enamorada':
-                    colorFondo = "#F8BBD0";
-                    break;
-                case 'pasional':
+                case 'enamorada':   colorFondo = "#F8BBD0"; break;
+                case 'reflexiva':   colorFondo = "#EDE7F6"; break;
+                // ── Madrugada ───────────────────────────────────
+                case 'nostalgica':  colorFondo = "#263238"; break;
+                case 'introspectiva': colorFondo = "#37474F"; break;
+                case 'serena':      colorFondo = "#E8F5E9"; break;
+                // ── Especiales ──────────────────────────────────
+                case 'carinosa':    colorFondo = "#FCE4EC"; break;
+                case 'triste':
+                case 'melancolica': colorFondo = "#424242"; break;
                 case 'picara':
-                    colorFondo = "#D32F2F";
-                    break;
                 case 'sexy':
                 case 'sensual':
-                case 'excitada':
-                    colorFondo = "#4A148C";
-                    break;
+                case 'excitada':    colorFondo = "#4A148C"; break;
+                case 'con':         colorFondo = "#ECEFF1"; break;
             }
             document.body.style.backgroundColor = colorFondo;
-            console.log("El cuerpo de Elora reacciona al ánimo: " + animo);
+            console.log("[Elora] Ánimo: " + animo + " → color: " + colorFondo);
         }
 
         (async () => {
