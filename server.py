@@ -33,6 +33,16 @@ MODELOS_OPENROUTER = [
     "openrouter/free",
 ]
 
+def _fallback_models() -> list:
+    """Devuelve hasta 3 modelos para el array OR `route:fallback`.
+    Prioriza `openrouter/free` (meta-modelo siempre disponible) colocándolo
+    primero si está en la lista; el resto en orden original. Máx 3 (límite OR).
+    """
+    meta = [m for m in MODELOS_OPENROUTER if m == 'openrouter/free']
+    otros = [m for m in MODELOS_OPENROUTER if m != 'openrouter/free']
+    return (meta + otros)[:3]
+
+
 MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
 
 # Sin timeout agresivo: OpenRouter gestiona el fallback entre modelos nativamente.
@@ -910,7 +920,7 @@ def chat():
                         'timeout': TIMEOUT_MODELO,
                         'stream': True,
                         'extra_body': {
-                            'models': MODELOS_OPENROUTER[:3],  # OR: máx 3 modelos
+                            'models': _fallback_models(),
                             'route': 'fallback',
                         },
                     }
@@ -1160,7 +1170,7 @@ def saludo_inicial():
                 temperature=0.9,
                 timeout=TIMEOUT_MODELO,
                 extra_body={
-                    'models': MODELOS_OPENROUTER[:3],  # OR: máx 3 modelos
+                    'models': _fallback_models(),
                     'route': 'fallback',
                 },
             )
