@@ -28,6 +28,7 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 MODELOS_OPENROUTER = [
     "liquid/lfm-2.5-1.2b-instruct:free",
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
     "google/gemma-4-26b-a4b-it:free",
     "openrouter/free",
 ]
