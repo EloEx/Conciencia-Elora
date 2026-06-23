@@ -56,6 +56,7 @@
                     const welcome = document.getElementById('welcome');
                     if (welcome) welcome.remove();
                     for (const entry of data) {
+                        if (entry.proactivo) continue;
                         if (entry.role === 'user') {
                             chat.innerHTML += `<p><strong>Tú:</strong> ${entry.text}</p>`;
                         } else if (entry.role === 'model') {
