@@ -28,10 +28,9 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 MODELOS_OPENROUTER = [
     "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
     "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
-    "cohere/north-mini-code:free",
-    "qwen/qwen3-coder:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "openrouter/free",
 ]
 
 MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
