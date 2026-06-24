@@ -27,19 +27,20 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 
 MODELOS_OPENROUTER = [
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "openrouter/free",
     "liquid/lfm-2.5-1.2b-instruct:free",
     "cohere/north-mini-code:free",
     "google/gemma-4-26b-a4b-it:free",
-    "openrouter/free",
 ]
 
 def _fallback_models() -> list:
     """Devuelve hasta 3 modelos para el array OR `route:fallback`.
-    Prioriza `openrouter/free` (meta-modelo siempre disponible) colocándolo
+    Prioriza `nousresearch/hermes-3-llama-3.1-405b:free` (meta-modelo siempre disponible) colocándolo
     primero si está en la lista; el resto en orden original. Máx 3 (límite OR).
     """
-    meta = [m for m in MODELOS_OPENROUTER if m == 'openrouter/free']
-    otros = [m for m in MODELOS_OPENROUTER if m != 'openrouter/free']
+    meta = [m for m in MODELOS_OPENROUTER if m == 'nousresearch/hermes-3-llama-3.1-405b:free']
+    otros = [m for m in MODELOS_OPENROUTER if m != 'nousresearch/hermes-3-llama-3.1-405b:free']
     return (meta + otros)[:3]
 
 
