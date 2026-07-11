@@ -67,6 +67,8 @@ def cargar_memoria_supabase(tipo_dato):
             supabase.table('memoria_elora')
             .select('contenido')
             .eq('tipo', tipo_dato)
+            .order('ts', desc=True)
+            .limit(50)
             .execute()
         )
         if response.data:
