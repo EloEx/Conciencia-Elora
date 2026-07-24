@@ -3,6 +3,7 @@ import re
 import json
 import time
 import threading
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 import httpx
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
@@ -55,6 +56,12 @@ TIMEOUT_MODELO = httpx.Timeout(connect=10.0, read=90.0, write=15.0, pool=5.0)
 
 
 # ── Utilidades de tiempo / estado ──────────────────────────────────────────────
+def generar_url_imagen(prompt_en_ingles: str) -> str:
+    """Genera una URL directa de Pollinations a partir de un prompt en inglés."""
+    prompt_limpio = urllib.parse.quote(prompt_en_ingles)
+    return f"https://image.pollinations.ai/prompt/{prompt_limpio}"
+
+
 def hora_nicaragua():
     return datetime.now(NICARAGUA_TZ)
 
