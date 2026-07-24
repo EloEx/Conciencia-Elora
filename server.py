@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import base64
 import threading
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -43,6 +44,20 @@ def _fallback_models() -> list:
     meta = [m for m in MODELOS_OPENROUTER if m == 'nousresearch/hermes-3-llama-3.1-405b:free']
     otros = [m for m in MODELOS_OPENROUTER if m != 'nousresearch/hermes-3-llama-3.1-405b:free']
     return (meta + otros)[:3]
+
+
+# Modelos con soporte de visión (imagen) en OpenRouter (gratuitos)
+MODELOS_VISION = [
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "qwen/qwen2.5-vl-72b-instruct:free",
+    "openrouter/free",
+]
+
+
+def _fallback_models_vision() -> list:
+    """Devuelve hasta 3 modelos con capacidad de visión para envío de imágenes."""
+    return MODELOS_VISION[:3]
 
 
 MAX_RONDAS_TOOLS = 8   # maximo de rondas de tool-calling por modelo
@@ -521,9 +536,19 @@ def build_messages(user_msg, persona_extra=None, file_bytes=None, file_mime=None
             messages.append({'role': role, 'content': text})
 
     if file_bytes and file_mime:
-        tipo = 'imagen' if file_mime.startswith('image/') else 'audio'
-        desc = f'[El usuario adjuntó un archivo de {tipo}: {file_mime}]'
-        contenido = f'{desc}\n{user_msg}'.strip() if user_msg else desc
+        if file_mime.startswith('image/'):
+            # Payload multimodal real: el modelo VE la imagen
+            encoded = base64.b64encode(file_bytes).decode('utf-8')
+            data_uri = f"data:{file_mime};base64,{encoded}"
+            texto_prompt = user_msg.strip() if user_msg and user_msg.strip() else "¿Qué ves en esta imagen?"
+            contenido = [
+                {"type": "text", "text": texto_prompt},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ]
+        else:
+            # Audio: descripción textual (no hay soporte multimodal universal para audio)
+            desc = f'[El usuario adjuntó un audio: {file_mime}]'
+            contenido = f'{desc}\n{user_msg}'.strip() if user_msg else desc
     else:
         contenido = user_msg or ''
 
@@ -924,15 +949,18 @@ def chat():
             # ── Rondas de tool-calling + respuesta final ───────────────────────
             for _ronda in range(MAX_RONDAS_TOOLS):
                 try:
+                    # Elegir pool de modelos según si hay imagen adjunta
+                    _es_imagen = bool(file_bytes and file_mime and file_mime.startswith('image/'))
+                    _modelos_pool = _fallback_models_vision() if _es_imagen else _fallback_models()
                     kwargs = {
-                        'model': MODELOS_OPENROUTER[0],
+                        'model': _modelos_pool[0],
                         'messages': messages,
                         'max_tokens': 1024,
                         'temperature': 0.85,
                         'timeout': TIMEOUT_MODELO,
                         'stream': True,
                         'extra_body': {
-                            'models': _fallback_models(),
+                            'models': _modelos_pool,
                             'route': 'fallback',
                         },
                     }
