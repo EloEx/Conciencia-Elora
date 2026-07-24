@@ -29,10 +29,10 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 MODELOS_OPENROUTER = [
     "nousresearch/hermes-3-llama-3.1-405b:free",
+    "google/gemma-4-26b-a4b-it:free",
     "openrouter/free",
     "liquid/lfm-2.5-1.2b-instruct:free",
     "cohere/north-mini-code:free",
-    "google/gemma-4-26b-a4b-it:free",
 ]
 
 def _fallback_models() -> list:
