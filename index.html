@@ -229,6 +229,7 @@
                     aplicarAnimo(animoMatch[1]);
                     replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
+                replySpan.innerHTML = renderizarMarkdownImagen(replySpan.textContent);
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
@@ -310,10 +311,18 @@
                     aplicarAnimo(animoMatch[1]);
                     replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
+                replySpan.innerHTML = renderizarMarkdownImagen(replySpan.textContent);
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
             chat.scrollTop = chat.scrollHeight;
+        }
+
+        function renderizarMarkdownImagen(texto) {
+            const regexMarkdownImg = /!\[([^\]]*)\]\((https:\/\/image\.pollinations\.ai\/[^\)]+)\)/g;
+            return texto.replace(regexMarkdownImg, (match, altText, url) => {
+                return `<br><img src="${url}" alt="${altText}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+            });
         }
     </script>
 </body>
