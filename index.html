@@ -319,9 +319,11 @@
         }
 
         function renderizarMarkdownImagen(texto) {
-            const regexMarkdownImg = /!\[([^\]]*)\]\((https:\/\/image\.pollinations\.ai\/[^\)]+)\)/g;
+            const regexMarkdownImg = /!\[([^\]]*)\]\(([^)]+)\)/g;
             return texto.replace(regexMarkdownImg, (match, altText, url) => {
-                return `<br><img src="${url}" alt="${altText}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+                // Limpiar espacios y saltos de línea dentro de la URL para que cargue la imagen
+                const urlClean = url.replace(/\s+/g, '%20');
+                return `<br><img src="${urlClean}" alt="${altText}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
             });
         }
     </script>
