@@ -326,21 +326,52 @@
         }
 
         function renderizarMarkdownMultimedia(texto) {
-            // Detectar y renderizar videos (mp4, webm o rutas de video de Pollinations)
-            const regexVideo = /!\[([^\]]*)\]\((https?:\/\/[^\s)]+\.(?:mp4|webm)|https:\/\/gen\.pollinations\.ai\/video\/[^\s)]+)\)/g;
-            texto = texto.replace(regexVideo, (match, altText, url) => {
-                const urlFinal = encodeURI(url.replace(/(\r\n|\n|\r)/gm, ''));
-                return `<br><video src="${urlFinal}" autoplay loop muted playsinline style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);"></video><br>`;
-            });
+            const regexMarkdownMultimedia = /!\[([^\]]*)\]\(([^)]+)\)/g;
+            const escaparHtml = (valor) => valor.replace(/[&<>"']/g, (caracter) => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[caracter]));
 
-            // Mantener el soporte de imágenes existente
-            const regexImg = /!\[([^\]]*)\]\((https:\/\/image\.pollinations\.ai\/[^\s)]+)\)/g;
-            texto = texto.replace(regexImg, (match, altText, url) => {
-                const urlFinal = encodeURI(url.replace(/(\r\n|\n|\r)/gm, ''));
-                return `<br><img src="${urlFinal}" alt="${altText}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
-            });
+            return texto.replace(regexMarkdownMultimedia, (match, altText, url) => {
+                // Quitar saltos de línea y codificar espacios de prompts externos.
+                const urlLimpia = url.replace(/(\r\n|\n|\r)/gm, '').trim();
+                const urlFinal = encodeURI(urlLimpia);
 
-            return texto;
+                let urlAnalizada;
+                try {
+                    urlAnalizada = new URL(urlFinal);
+                } catch (_) {
+                    return match;
+                }
+
+                if (!['http:', 'https:'].includes(urlAnalizada.protocol)) {
+                    return match;
+                }
+
+                const recurso = `${urlAnalizada.pathname}${urlAnalizada.search}`.toLowerCase();
+                const esVideoPollinations =
+                    urlAnalizada.hostname === 'gen.pollinations.ai' &&
+                    urlAnalizada.pathname.startsWith('/video/');
+                const esVideoArchivo = /\.(mp4|webm|ogg|mov)(?:[?#]|$)/i.test(recurso);
+                const esGif = /\.gif(?:[?#]|$)/i.test(recurso);
+                const esImagenPollinations =
+                    urlAnalizada.hostname === 'image.pollinations.ai';
+                const altSeguro = escaparHtml(altText);
+
+                if (esVideoPollinations || esVideoArchivo) {
+                    return `<br><video src="${urlFinal}" autoplay loop muted playsinline controls style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);"></video><br>`;
+                }
+
+                // Los GIF son imágenes animadas; <img> conserva su animación nativa.
+                if (esGif || esImagenPollinations) {
+                    return `<br><img src="${urlFinal}" alt="${altSeguro}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+                }
+
+                return match;
+            });
         }
     </script>
 </body>
