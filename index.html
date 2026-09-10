@@ -37,6 +37,7 @@
 
     <div class="input-area">
         <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="Adjuntar imagen o audio">📎</button>
+        <button class="icon-btn" onclick="solicitarVideo()" title="Generar video o animación">🎬</button>
         <button class="icon-btn" id="micBtn" onclick="alternarGrabacion()" title="Grabar nota de voz">🎤</button>
         <input type="file" id="fileInput" accept="image/*,audio/*" onchange="mostrarAdjunto()">
         <input type="text" id="userMsg" placeholder="Escríbeme algo..." onkeypress="if(event.key==='Enter') sendMessage()">
@@ -229,7 +230,7 @@
                     aplicarAnimo(animoMatch[1]);
                     replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
-                replySpan.innerHTML = renderizarMarkdownImagen(replySpan.textContent);
+                replySpan.innerHTML = renderizarMarkdownMultimedia(replySpan.textContent);
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
@@ -311,20 +312,35 @@
                     aplicarAnimo(animoMatch[1]);
                     replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
-                replySpan.innerHTML = renderizarMarkdownImagen(replySpan.textContent);
+                replySpan.innerHTML = renderizarMarkdownMultimedia(replySpan.textContent);
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
             chat.scrollTop = chat.scrollHeight;
         }
 
-        function renderizarMarkdownImagen(texto) {
-            const regexMarkdownImg = /!\[([^\]]*)\]\(([^)]+)\)/g;
-            return texto.replace(regexMarkdownImg, (match, altText, url) => {
-                // Limpiar espacios y saltos de línea dentro de la URL para que cargue la imagen
-                const urlClean = url.replace(/\s+/g, '%20');
-                return `<br><img src="${urlClean}" alt="${altText}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+        function solicitarVideo() {
+            const input = document.getElementById('userMsg');
+            input.value = 'Genera un video corto o animación en bucle basada en la escena y contexto exacto de lo que acabas de describir, usando un formato de video.';
+            sendMessage();
+        }
+
+        function renderizarMarkdownMultimedia(texto) {
+            // Detectar y renderizar videos (mp4, webm o rutas de video de Pollinations)
+            const regexVideo = /!\[([^\]]*)\]\((https?:\/\/[^\s)]+\.(?:mp4|webm)|https:\/\/gen\.pollinations\.ai\/video\/[^\s)]+)\)/g;
+            texto = texto.replace(regexVideo, (match, altText, url) => {
+                const urlFinal = encodeURI(url.replace(/(\r\n|\n|\r)/gm, ''));
+                return `<br><video src="${urlFinal}" autoplay loop muted playsinline style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);"></video><br>`;
             });
+
+            // Mantener el soporte de imágenes existente
+            const regexImg = /!\[([^\]]*)\]\((https:\/\/image\.pollinations\.ai\/[^\s)]+)\)/g;
+            texto = texto.replace(regexImg, (match, altText, url) => {
+                const urlFinal = encodeURI(url.replace(/(\r\n|\n|\r)/gm, ''));
+                return `<br><img src="${urlFinal}" alt="${altText}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+            });
+
+            return texto;
         }
     </script>
 </body>
