@@ -4,6 +4,7 @@ import json
 import time
 import base64
 import threading
+import traceback
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 import httpx
@@ -1147,9 +1148,23 @@ def chat():
             # ── Emitir ánimo al frontend (token oculto al final del stream) ──
             yield f'\n__ANIMO__:{calcular_estado_animo(hora_nicaragua(), HISTORY)}'
 
-        return Response(stream_with_context(generate()), mimetype='text/plain')
+        def generate_safe():
+            """Evita que una excepción del generador de streaming produzca un 500 genérico."""
+            try:
+                yield from generate()
+            except Exception as e:
+                print(f'[Elora] Excepción no controlada durante el streaming: {e}', flush=True)
+                traceback.print_exc()
+                yield (
+                    '\n\nLo siento, ocurrió un problema temporal al generar mi respuesta. '
+                    'Inténtalo de nuevo en un momento.'
+                )
+
+        return Response(stream_with_context(generate_safe()), mimetype='text/plain')
 
     except Exception as e:
+        print(f'[Elora] Error interno en /chat: {e}', flush=True)
+        traceback.print_exc()
         return jsonify({'reply': f'Error interno: {str(e)}'}), 500
 
 
