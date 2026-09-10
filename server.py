@@ -30,11 +30,11 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 
 MODELOS_OPENROUTER = [
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "google/gemma-4-26b-a4b-it:free",
+    "nex-agi/nex-n2.5-mini:free",
+    "dots-studio/dots-3-note-preview:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "liquid/lfm-2.5-2.6b:free",
     "openrouter/free",
-    "liquid/lfm-2.5-1.2b-instruct:free",
-    "cohere/north-mini-code:free",
 ]
 
 def _fallback_models() -> list:
@@ -49,9 +49,9 @@ def _fallback_models() -> list:
 
 # Modelos con soporte de visión (imagen) en OpenRouter (gratuitos)
 MODELOS_VISION = [
-    "meta-llama/llama-3.2-11b-vision-instruct:free",
-    "google/gemma-4-26b-a4b-it:free",
-    "qwen/qwen2.5-vl-72b-instruct:free",
+    "nex-agi/nex-n2.5-mini:free",
+    "dots-studio/dots-3-note-preview:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     "openrouter/free",
 ]
 
@@ -941,6 +941,7 @@ def chat():
             client = crear_cliente()
             reply_text = ''
             funciones_invocadas = []
+            fallo_api = ''
 
             # ── Fallback nativo de OpenRouter (models array) ──────────────────
             # Un solo call HTTP; OpenRouter rota entre modelos en milisegundos
@@ -1070,6 +1071,7 @@ def chat():
                     break
 
                 except (APITimeoutError, RateLimitError) as e:
+                    fallo_api = str(e).lower()
                     print(
                         f'[Elora] OpenRouter timeout/quota: {str(e)[:60]}',
                         flush=True,
@@ -1078,6 +1080,7 @@ def chat():
 
                 except APIStatusError as e:
                     err_low = str(e).lower()
+                    fallo_api = err_low
                     if usar_tools and any(
                         kw in err_low for kw in (
                             'tool', 'function', 'unsupported',
@@ -1096,6 +1099,7 @@ def chat():
 
                 except Exception as e:
                     err_low = str(e).lower()
+                    fallo_api = err_low
                     if usar_tools and any(
                         kw in err_low for kw in ('tool', 'function', 'unsupported')
                     ):
@@ -1109,6 +1113,14 @@ def chat():
                 print('[Elora] Respuesta obtenida via OpenRouter.', flush=True)
 
             if not reply_text:
+                if 'free-models-per-day' in fallo_api or (
+                    'rate limit' in fallo_api and 'free' in fallo_api
+                ):
+                    yield (
+                        'La cuota diaria de modelos gratuitos de OpenRouter se agotó. '
+                        'El servicio volverá a estar disponible cuando la cuota se reinicie.'
+                    )
+                    return
                 yield (
                     'Mi amor, todos los modelos están ocupados ahora mismo. '
                     '¡Vuelvo en un momento!'
