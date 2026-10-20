@@ -336,13 +336,13 @@
             }[caracter]));
 
             return texto.replace(regexMarkdownMultimedia, (match, altText, url) => {
-                // Quitar saltos de línea y codificar espacios de prompts externos.
-                const urlLimpia = url.replace(/(\r\n|\n|\r)/gm, '').trim();
-                const urlFinal = encodeURI(urlLimpia);
+                // Compactar espacios/saltos del markdown y codificar una sola vez.
+                const urlLimpia = url.trim().replace(/\s+/g, ' ');
+                const urlFinal = encodeURI(urlLimpia).replace(/%25([0-9a-f]{2})/gi, '%$1');
 
                 let urlAnalizada;
                 try {
-                    urlAnalizada = new URL(urlFinal);
+                    urlAnalizada = new URL(urlFinal, window.location.origin);
                 } catch (_) {
                     return match;
                 }
@@ -351,23 +351,46 @@
                     return match;
                 }
 
-                const recurso = `${urlAnalizada.pathname}${urlAnalizada.search}`.toLowerCase();
                 const esVideoPollinations =
                     urlAnalizada.hostname === 'gen.pollinations.ai' &&
                     urlAnalizada.pathname.startsWith('/video/');
-                const esVideoArchivo = /\.(mp4|webm|ogg|mov)(?:[?#]|$)/i.test(recurso);
-                const esGif = /\.gif(?:[?#]|$)/i.test(recurso);
+                const esVideoProxy =
+                    urlAnalizada.origin === window.location.origin &&
+                    urlAnalizada.pathname === '/media/video';
+                const extensionVideo = urlAnalizada.pathname.match(/\.(mp4|webm|ogg|mov)$/i)?.[1]?.toLowerCase();
+                const esVideoArchivo = Boolean(extensionVideo);
+                const esGif = /\.gif$/i.test(urlAnalizada.pathname);
                 const esImagenPollinations =
                     urlAnalizada.hostname === 'image.pollinations.ai';
                 const altSeguro = escaparHtml(altText);
 
-                if (esVideoPollinations || esVideoArchivo) {
-                    return `<br><video src="${urlFinal}" autoplay loop muted playsinline controls style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);"></video><br>`;
+                if (esVideoPollinations || esVideoProxy || esVideoArchivo) {
+                    let videoSrc = urlAnalizada.href;
+                    if (esVideoPollinations) {
+                        let prompt;
+                        try {
+                            prompt = decodeURIComponent(urlAnalizada.pathname.slice('/video/'.length));
+                        } catch (_) {
+                            return match;
+                        }
+                        const proxyUrl = new URL('/media/video', window.location.origin);
+                        proxyUrl.searchParams.set('prompt', prompt);
+                        videoSrc = proxyUrl.href;
+                    }
+                    const tiposVideo = {
+                        mp4: 'video/mp4',
+                        webm: 'video/webm',
+                        ogg: 'video/ogg',
+                        mov: 'video/quicktime'
+                    };
+                    const tipoVideo = tiposVideo[extensionVideo] || 'video/mp4';
+                    const videoSrcSeguro = escaparHtml(videoSrc);
+                    return `<br><video autoplay loop muted playsinline controls preload="metadata" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);"><source src="${videoSrcSeguro}" type="${tipoVideo}">Tu navegador no puede reproducir este video.</video><br>`;
                 }
 
                 // Los GIF son imágenes animadas; <img> conserva su animación nativa.
                 if (esGif || esImagenPollinations) {
-                    return `<br><img src="${urlFinal}" alt="${altSeguro}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+                    return `<br><img src="${escaparHtml(urlAnalizada.href)}" alt="${altSeguro}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
                 }
 
                 return match;
