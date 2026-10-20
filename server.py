@@ -30,8 +30,7 @@ NICARAGUA_TZ = timezone(timedelta(hours=-6))
 
 
 MODELOS_OPENROUTER = [
-    "nex-agi/nex-n2.5-mini:free",
-    "dots-studio/dots-3-note-preview:free",
+    "nvidia/nemotron-3.5-super-vl:free",
     "nvidia/nemotron-3.5-lightning:free",
     "liquid/lfm-2.5-2.6b:free",
     "openrouter/free",
