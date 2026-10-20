@@ -231,6 +231,7 @@
                     replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
                 replySpan.innerHTML = renderizarMarkdownMultimedia(replySpan.textContent);
+                instalarFallbackMultimedia(replySpan);
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
@@ -313,6 +314,7 @@
                     replySpan.textContent = replySpan.textContent.replace(/\n__ANIMO__:\w+/, '');
                 }
                 replySpan.innerHTML = renderizarMarkdownMultimedia(replySpan.textContent);
+                instalarFallbackMultimedia(replySpan);
             } catch (e) {
                 replySpan.innerHTML = `<span style="color:red;">Error de conexión: ${e.message}</span>`;
             }
@@ -361,7 +363,14 @@
                 const esVideoArchivo = Boolean(extensionVideo);
                 const esGif = /\.gif$/i.test(urlAnalizada.pathname);
                 const esImagenPollinations =
-                    urlAnalizada.hostname === 'image.pollinations.ai';
+                    (urlAnalizada.hostname === 'gen.pollinations.ai' &&
+                        urlAnalizada.pathname.startsWith('/image/')) ||
+                    (urlAnalizada.hostname === 'image.pollinations.ai' &&
+                        urlAnalizada.pathname.startsWith('/prompt/'));
+                const esImagenProxy =
+                    urlAnalizada.origin === window.location.origin &&
+                    urlAnalizada.pathname === '/media/image';
+                const esImagenArchivo = /\.(png|jpe?g|webp|avif|bmp)$/i.test(urlAnalizada.pathname);
                 const altSeguro = escaparHtml(altText);
 
                 if (esVideoPollinations || esVideoProxy || esVideoArchivo) {
@@ -390,10 +399,42 @@
 
                 // Los GIF son imágenes animadas; <img> conserva su animación nativa.
                 if (esGif || esImagenPollinations) {
+                    let imageSrc = urlAnalizada.href;
+                    if (esImagenPollinations) {
+                        let prompt;
+                        try {
+                            const marker = urlAnalizada.hostname === 'image.pollinations.ai'
+                                ? '/prompt/'
+                                : '/image/';
+                            prompt = decodeURIComponent(urlAnalizada.pathname.slice(marker.length));
+                        } catch (_) {
+                            return match;
+                        }
+                        const proxyUrl = new URL('/media/image', window.location.origin);
+                        proxyUrl.searchParams.set('prompt', prompt);
+                        imageSrc = proxyUrl.href;
+                    }
+                    return `<br><img src="${escaparHtml(imageSrc)}" alt="${altSeguro}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
+                }
+
+                if (esImagenProxy || esImagenArchivo) {
                     return `<br><img src="${escaparHtml(urlAnalizada.href)}" alt="${altSeguro}" style="max-width: 100%; border-radius: 12px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" loading="lazy"><br>`;
                 }
 
                 return match;
+            });
+        }
+
+        function instalarFallbackMultimedia(contenedor) {
+            contenedor.querySelectorAll('img, video').forEach((medio) => {
+                medio.addEventListener('error', () => {
+                    const aviso = document.createElement('span');
+                    aviso.textContent = medio.tagName === 'VIDEO'
+                        ? 'No se pudo cargar el video. Comprueba la configuración y el saldo de Pollinations.'
+                        : 'No se pudo cargar la imagen. Comprueba la configuración y el saldo de Pollinations.';
+                    aviso.style.cssText = 'display:block;color:#ffb4a2;margin-top:8px;font-size:0.9rem;';
+                    medio.replaceWith(aviso);
+                }, { once: true });
             });
         }
     </script>
